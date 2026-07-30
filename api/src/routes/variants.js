@@ -9,6 +9,11 @@ const router = express.Router();
 // Deliberately does not touch stock or sales history — those only ever
 // change through the endpoints below, so there's always an auditable
 // event (a sale, an adjustment, a PO receipt) behind a stock change.
+//
+// Deliberately does NOT bump updated_at either: that column is used
+// elsewhere (the "Last Counted" column on the Weekly Report) to mean
+// specifically "the last time this variant's stock actually changed" —
+// correcting a typo'd SKU shouldn't count as a stock count.
 router.patch(
   "/:id",
   asyncHandler(async (req, res) => {
@@ -24,7 +29,6 @@ router.patch(
     }
     if (fields.length === 0) return res.status(400).json({ error: "No updatable fields provided" });
 
-    fields.push("updated_at = now()");
     values.push(id, req.storeId);
 
     try {
