@@ -9,6 +9,8 @@ const vendorsRouter = require("./routes/vendors");
 const stylesRouter = require("./routes/styles");
 const variantsRouter = require("./routes/variants");
 const purchaseOrdersRouter = require("./routes/purchaseOrders");
+const reportRecipientsRouter = require("./routes/reportRecipients");
+const reportsRouter = require("./routes/reports");
 
 const app = express();
 
@@ -32,6 +34,8 @@ app.use("/api/vendors", vendorsRouter);
 app.use("/api/styles", stylesRouter);
 app.use("/api/variants", variantsRouter);
 app.use("/api/purchase-orders", purchaseOrdersRouter);
+app.use("/api/report-recipients", reportRecipientsRouter);
+app.use("/api/reports", reportsRouter);
 
 // Central error handler. Translates well-known Postgres error codes into
 // clean, specific API responses instead of a generic 500 wherever

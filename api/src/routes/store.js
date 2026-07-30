@@ -19,4 +19,21 @@ router.get(
   })
 );
 
+// PATCH /api/store — rename the current store. Matches the Settings
+// tab's store name field (only editable while edit mode is on).
+router.patch(
+  "/",
+  asyncHandler(async (req, res) => {
+    const name = (req.body.name || "").trim();
+    if (!name) return res.status(400).json({ error: "name is required" });
+
+    const { rowCount } = await pool.query(
+      "UPDATE stores SET name = $1, updated_at = now() WHERE id = $2",
+      [name, req.storeId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: "Store not found" });
+    res.json({ ok: true });
+  })
+);
+
 module.exports = router;
