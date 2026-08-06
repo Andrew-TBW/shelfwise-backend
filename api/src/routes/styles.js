@@ -51,8 +51,14 @@ router.post(
 
       // A brand new style always gets appended after everything else —
       // there's no existing block for it to slot into, so no shifting
-      // is needed for this case at all.
-      const assignedNumbers = await itemNumbers.appendNewStyleNumbers(client, req.storeId, variants.length);
+      // is needed for this case at all. Its OWN initial variants still
+      // land in color-then-size order relative to each other, though,
+      // regardless of what order they were typed into the form.
+      const assignedNumbers = await itemNumbers.appendNewStyleNumbers(
+        client,
+        req.storeId,
+        variants.map((v) => ({ size: v.size || "", color: v.color || "" }))
+      );
 
       for (let i = 0; i < variants.length; i++) {
         const v = variants[i];
@@ -218,7 +224,10 @@ router.post(
         return res.status(409).json({ error: "This style is inactive — reactivate it before adding new variants." });
       }
 
-      const itemNumber = await itemNumbers.insertVariantNumber(client, req.storeId, styleId);
+      const itemNumber = await itemNumbers.insertVariantNumber(client, req.storeId, styleId, {
+        size: size || "",
+        color: color || "",
+      });
 
       const { rows } = await client.query(
         `INSERT INTO variants (store_id, style_id, sku, size, color, stock, item_number)

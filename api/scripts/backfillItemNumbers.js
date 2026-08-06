@@ -2,14 +2,17 @@
 //
 // One-time script: assigns item numbers to every currently-active
 // variant that existed before the item-number feature was built.
-// Grouped by style (in style creation order), then by variant creation
-// order within each style, starting at 100 — matching exactly how a
-// brand-new store's variants get numbered going forward, just applied
+// Grouped by style (in style creation order), then sorted by
+// color-then-size WITHIN each style — matching exactly how a brand-new
+// store's variants get numbered going forward, just applied
 // retroactively to what's already there.
 //
 // Safe to run more than once — any variant that already has a number
 // is left untouched; only variants with item_number IS NULL (and whose
-// style is active) get assigned one.
+// style is active) get assigned one. If you need to fix the ORDER of
+// variants that already have numbers (e.g. anything numbered before
+// this script's sort-aware fix existed), use resortItemNumbers.js
+// instead — that's a separate, one-time correction pass.
 //
 //   node scripts/backfillItemNumbers.js
 
@@ -34,11 +37,18 @@ async function main() {
       let assignedCount = 0;
       for (const style of styles) {
         const { rows: variants } = await client.query(
-          "SELECT id FROM variants WHERE style_id = $1 AND deactivated_at IS NULL AND item_number IS NULL ORDER BY created_at",
+          "SELECT id, size, color FROM variants WHERE style_id = $1 AND deactivated_at IS NULL AND item_number IS NULL",
           [style.id]
         );
+        // Sorted before inserting, same as reclaimStyleNumbers — so
+        // multiple variants being backfilled together land in the
+        // right relative order as they're inserted one at a time.
+        variants.sort(itemNumbers.compareVariantsByColorThenSize);
         for (const variant of variants) {
-          const number = await itemNumbers.insertVariantNumber(client, store.id, style.id);
+          const number = await itemNumbers.insertVariantNumber(client, store.id, style.id, {
+            size: variant.size,
+            color: variant.color,
+          });
           await client.query("UPDATE variants SET item_number = $1 WHERE id = $2", [number, variant.id]);
           assignedCount++;
         }

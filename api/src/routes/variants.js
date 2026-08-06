@@ -111,7 +111,7 @@ router.post(
       await itemNumbers.lockStoreVariants(client, req.storeId);
 
       const beforeRes = await client.query(
-        `SELECT v.style_id, s.deactivated_at AS style_deactivated_at
+        `SELECT v.style_id, v.size, v.color, s.deactivated_at AS style_deactivated_at
          FROM variants v JOIN styles s ON s.id = v.style_id
          WHERE v.id = $1 AND v.store_id = $2 AND v.deactivated_at IS NOT NULL`,
         [id, req.storeId]
@@ -120,12 +120,12 @@ router.post(
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "Variant not found, or already active" });
       }
-      const { style_id: styleId, style_deactivated_at: styleDeactivatedAt } = beforeRes.rows[0];
+      const { style_id: styleId, size, color, style_deactivated_at: styleDeactivatedAt } = beforeRes.rows[0];
 
       await client.query("UPDATE variants SET deactivated_at = NULL WHERE id = $1", [id]);
 
       if (!styleDeactivatedAt) {
-        const number = await itemNumbers.insertVariantNumber(client, req.storeId, styleId);
+        const number = await itemNumbers.insertVariantNumber(client, req.storeId, styleId, { size, color });
         await client.query("UPDATE variants SET item_number = $1 WHERE id = $2", [number, id]);
       }
 
