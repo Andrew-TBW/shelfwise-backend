@@ -5,20 +5,39 @@
 // submitted/partially_received PO — then runs the reorder math over all
 // of it. This mirrors the `enrichedStyles` useMemo in ShelfWise.jsx
 // exactly, just computed server-side instead of in the browser.
+//
+// By default, only active styles/variants are returned — matching how
+// every existing caller (Shelf, Weekly Report, Voice Count) already
+// expects this to behave, unchanged. Pass { includeInactive: true } to
+// also get deactivated ones back (used by the Shelf tab's "show
+// inactive" toggle) — each tagged with its own deactivatedAt so the
+// frontend can tell active from inactive without a second endpoint.
+//
+// A variant is effectively inactive if EITHER its own deactivated_at is
+// set, OR its parent style's is — deactivating a style never needs to
+// touch its variant rows individually; this filtering rule handles it.
 const pool = require("./db");
 const { computeVariantStatus, rollupStyle } = require("./reorderLogic");
 
-async function getEnrichedStyles(storeId) {
+async function getEnrichedStyles(storeId, { includeInactive = false } = {}) {
+  const styleFilter = includeInactive ? "" : "AND deactivated_at IS NULL";
   const stylesRes = await pool.query(
-    "SELECT * FROM styles WHERE store_id = $1 ORDER BY name",
+    `SELECT * FROM styles WHERE store_id = $1 ${styleFilter} ORDER BY name`,
     [storeId]
   );
   const styles = stylesRes.rows;
   if (styles.length === 0) return [];
 
   const styleIds = styles.map((s) => s.id);
+  // When not including inactive items, a variant must be excluded if
+  // EITHER it's individually deactivated, or its style is — even though
+  // the style-level filter above already excludes inactive styles'
+  // rows entirely, this second check matters for the includeInactive=true
+  // case too (it still needs each variant's own status correctly
+  // reported, not just "style happened to be in the result set").
+  const variantFilter = includeInactive ? "" : "AND deactivated_at IS NULL";
   const variantsRes = await pool.query(
-    "SELECT * FROM variants WHERE style_id = ANY($1) ORDER BY sku",
+    `SELECT * FROM variants WHERE style_id = ANY($1) ${variantFilter} ORDER BY sku`,
     [styleIds]
   );
   const variants = variantsRes.rows;
@@ -63,10 +82,21 @@ async function getEnrichedStyles(storeId) {
       const sales = salesByVariant[v.id] || [];
       const incoming = incomingByVariant[v.id] || 0;
       const status = computeVariantStatus({ ...v, sales }, style, incoming);
-      return { ...v, sales, status };
+      // isActive reflects the SAME either/or rule described above, so
+      // the frontend can show "why is this grayed out" correctly even
+      // for a variant that's active itself but whose style isn't.
+      const isActive = !v.deactivated_at && !style.deactivated_at;
+      // item_number is deliberately excluded here — it's read from the
+      // raw `SELECT *` row above, but must never reach the Shelf tab,
+      // Weekly Report, or anywhere else that calls this function. Only
+      // the future count-sheet endpoint reads it, and it'll do so with
+      // its own dedicated, narrower query rather than through this one.
+      const { item_number, ...variantWithoutItemNumber } = v;
+      return { ...variantWithoutItemNumber, sales, status, isActive };
     });
     const rollup = rollupStyle(styleVariants);
-    return { ...style, variants: styleVariants, rollup };
+    const isActive = !style.deactivated_at;
+    return { ...style, variants: styleVariants, rollup, isActive };
   });
 }
 

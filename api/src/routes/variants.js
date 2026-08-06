@@ -2,6 +2,7 @@
 const express = require("express");
 const pool = require("../db");
 const asyncHandler = require("../middleware/asyncHandler");
+const itemNumbers = require("../itemNumbers");
 
 const router = express.Router();
 
@@ -45,27 +46,96 @@ router.patch(
   })
 );
 
-// DELETE /api/variants/:id — matches "Remove variant" (edit mode + confirm).
-// Blocked with a clear 409 if the variant appears on any purchase order
-// line, same reasoning as deleting a style.
+// DELETE /api/variants/:id — deactivates the variant (matches "Remove
+// variant", behind edit mode + confirm). Soft delete: the row and its
+// full sales history stay intact, just marked inactive, and can be
+// brought back via the reactivate endpoint below. Since nothing is
+// actually removed, this is no longer blocked by the variant appearing
+// on a purchase order — that restriction only applied to real deletion.
 router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
+    const client = await pool.connect();
     try {
-      const { rowCount } = await pool.query(
-        "DELETE FROM variants WHERE id = $1 AND store_id = $2",
+      await client.query("BEGIN");
+      await itemNumbers.lockStoreVariants(client, req.storeId);
+
+      const beforeRes = await client.query(
+        "SELECT item_number FROM variants WHERE id = $1 AND store_id = $2 AND deactivated_at IS NULL",
         [id, req.storeId]
       );
-      if (rowCount === 0) return res.status(404).json({ error: "Variant not found" });
+      if (beforeRes.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Variant not found, or already inactive" });
+      }
+      const previousNumber = beforeRes.rows[0].item_number;
+
+      await client.query("UPDATE variants SET deactivated_at = now() WHERE id = $1", [id]);
+
+      // previousNumber is null if the variant's style was already
+      // inactive (it wouldn't have had a number to begin with) — in
+      // that case there's nothing to release. Clear this row's own
+      // number FIRST, before shifting everything above it down — doing
+      // it in the other order briefly collides with the slot this row
+      // is still occupying.
+      if (previousNumber !== null) {
+        await client.query("UPDATE variants SET item_number = NULL WHERE id = $1", [id]);
+        await itemNumbers.removeVariantNumber(client, req.storeId, previousNumber);
+      }
+
+      await client.query("COMMIT");
       res.json({ ok: true });
     } catch (err) {
-      if (err.code === "23503") {
-        return res.status(409).json({
-          error: "Can't delete this variant — it appears on a purchase order. Close or remove that PO first.",
-        });
-      }
+      await client.query("ROLLBACK");
       throw err;
+    } finally {
+      client.release();
+    }
+  })
+);
+
+// POST /api/variants/:id/reactivate — brings a deactivated variant back.
+// If its style is currently active, it gets a fresh number right away
+// (inserted into that style's block, same as a brand-new variant would
+// be). If the style is ALSO currently inactive, it stays numberless —
+// it'll get picked up automatically whenever the style itself is
+// reactivated.
+router.post(
+  "/:id/reactivate",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await itemNumbers.lockStoreVariants(client, req.storeId);
+
+      const beforeRes = await client.query(
+        `SELECT v.style_id, s.deactivated_at AS style_deactivated_at
+         FROM variants v JOIN styles s ON s.id = v.style_id
+         WHERE v.id = $1 AND v.store_id = $2 AND v.deactivated_at IS NOT NULL`,
+        [id, req.storeId]
+      );
+      if (beforeRes.rows.length === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Variant not found, or already active" });
+      }
+      const { style_id: styleId, style_deactivated_at: styleDeactivatedAt } = beforeRes.rows[0];
+
+      await client.query("UPDATE variants SET deactivated_at = NULL WHERE id = $1", [id]);
+
+      if (!styleDeactivatedAt) {
+        const number = await itemNumbers.insertVariantNumber(client, req.storeId, styleId);
+        await client.query("UPDATE variants SET item_number = $1 WHERE id = $2", [number, id]);
+      }
+
+      await client.query("COMMIT");
+      res.json({ ok: true });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
     }
   })
 );
