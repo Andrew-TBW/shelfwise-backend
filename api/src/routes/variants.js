@@ -324,4 +324,46 @@ function toDateStr(v) {
   return typeof v === "string" ? v.slice(0, 10) : new Date(v).toISOString().slice(0, 10);
 }
 
+// DELETE /api/variants/:id/permanent — actually, irreversibly removes a
+// variant, for cleaning up a genuine mistake (an accidental duplicate,
+// a wrong SKU) — not a substitute for the normal deactivate flow. Only
+// allowed on a variant that's already individually deactivated, so the
+// two-step "deactivate, then separately confirm permanent removal"
+// flow can't be skipped.
+//
+// Sales history cascades away with it (ON DELETE CASCADE on
+// sales_entries.variant_id) — that's real data loss, which is exactly
+// what the confirmation prompt in front of this needs to say plainly.
+// Purchase order history does NOT cascade (ON DELETE RESTRICT on
+// purchase_order_lines.variant_id, by original design — see that
+// migration's own comment) — a variant that was ever ordered on a PO
+// is blocked from permanent deletion with a clear explanation, rather
+// than a raw database error, since that's real business record-keeping
+// that shouldn't silently disappear.
+router.delete(
+  "/:id/permanent",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+
+    const variantRes = await pool.query(
+      "SELECT id FROM variants WHERE id = $1 AND store_id = $2 AND deactivated_at IS NOT NULL",
+      [id, req.storeId]
+    );
+    if (variantRes.rows.length === 0) {
+      return res.status(404).json({ error: "Variant not found, or it isn't currently inactive — deactivate it first." });
+    }
+
+    const poRes = await pool.query("SELECT 1 FROM purchase_order_lines WHERE variant_id = $1 LIMIT 1", [id]);
+    if (poRes.rows.length > 0) {
+      return res.status(409).json({
+        error:
+          "This variant appears on a purchase order and can't be permanently deleted — its order history needs to stay intact. It can remain inactive indefinitely instead.",
+      });
+    }
+
+    await pool.query("DELETE FROM variants WHERE id = $1", [id]);
+    res.json({ ok: true });
+  })
+);
+
 module.exports = router;

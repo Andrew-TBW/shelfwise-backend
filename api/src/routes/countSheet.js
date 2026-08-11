@@ -39,7 +39,8 @@ router.get(
     }
 
     const { rows } = await pool.query(
-      `SELECT v.item_number, v.sku, v.size, v.color, s.name AS style_name, s.category, ven.name AS vendor_name
+      `SELECT v.id AS variant_id, v.style_id, v.item_number, v.sku, v.size, v.color, v.stock,
+              s.name AS style_name, s.category, ven.name AS vendor_name
        FROM variants v
        JOIN styles s ON s.id = v.style_id
        JOIN vendors ven ON ven.id = s.vendor_id
@@ -51,10 +52,13 @@ router.get(
     res.json(
       rows.map((r) => ({
         itemNumber: r.item_number,
+        styleId: r.style_id,
+        variantId: r.variant_id,
         styleName: r.style_name,
         size: r.size,
         color: r.color,
         sku: r.sku,
+        stock: r.stock,
         category: r.category,
         vendorName: r.vendor_name,
       }))
