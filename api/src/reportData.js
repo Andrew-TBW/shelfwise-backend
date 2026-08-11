@@ -1,11 +1,28 @@
 // reportData.js
 //
-// Computes the exact same Weekly Report data the app's live tab already
-// shows — grouped by style (worst-tier-first), each variant sorted the
-// same way, with stock, last-week sold total, rate, days left, and
-// status. Called directly by the email-sending script, in the same
-// process, reusing getEnrichedStyles() and reorderLogic.js exactly as
-// the API route does — no duplicated math, no HTTP round trip to itself.
+// Computes report data for the app's three report types — Weekly,
+// Monthly, and Immediate — all built on the same getEnrichedStyles()
+// and reorderLogic.js math the live Shelf tab uses, so nothing here
+// duplicates that logic independently.
+//
+// Weekly and Monthly share the same shape (grouped by style, worst
+// physical tier first) over a rolling window ending yesterday — the
+// only real difference is the window length, and one deliberate
+// choice: Weekly's "Rate / day" column keeps showing the same
+// general-purpose reorder velocity it always has (v.status.rate,
+// which is itself roughly a 30-day rate under the hood) — left
+// completely untouched from before this feature existed. Monthly's
+// "Rate / day" is instead computed strictly from what was actually
+// sold within ITS OWN 30-day window (sold ÷ 30), so it genuinely
+// reflects that specific window the way the report claims to, rather
+// than reusing a number that happens to be close to it by coincidence.
+//
+// Immediate is structurally different: it's not a time window at
+// all, but a *specific list* of variants (whichever ones were part of
+// the most recent Voice Count or Count Sheet submission) — that list
+// lives only in frontend session memory, so the caller has to supply
+// it; there's nothing in the database that could reconstruct "the
+// most recent batch" on its own.
 
 const pool = require("./db");
 const { getEnrichedStyles } = require("./enrichedStyles");
@@ -19,8 +36,6 @@ function toLocalDateStr(d) {
 }
 
 function formatDisplayDate(dateStr) {
-  // Midday avoids any midnight/DST edge case when just formatting a
-  // plain calendar date for display.
   const d = new Date(`${dateStr}T12:00:00`);
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
@@ -29,15 +44,6 @@ function variantLabel(v) {
   return [v.size, v.color].filter(Boolean).join(" / ") || v.sku;
 }
 
-// Same distinction drawn on the app's Weekly Report tab: the ticker
-// treats "enough is already on order" as effectively healthy (so it
-// doesn't nag about something already handled), but the report itself
-// shows the real, physical urgency of what's actually on the shelf,
-// with "already on order" as a separate annotation rather than
-// something that can hide the real status. Recomputed here from
-// daysRemaining (physical stock only, never includes incoming) — the
-// same value the ticker's own tier is built from, just not letting
-// incoming override it for reporting purposes.
 function physicalTierFromStatus(status) {
   if (status.daysRemaining === null) return "unknown";
   if (status.daysRemaining <= status.leadTime) return "urgent";
@@ -45,16 +51,18 @@ function physicalTierFromStatus(status) {
   return "healthy";
 }
 
-// Identical to the frontend's getLastCompleteWeekRange — a rolling 7
-// days ending yesterday. Run on a Monday (as the scheduled send is),
-// this lines up exactly with "the previous complete Monday-through-
-// Sunday week" — see the conversation notes on why these two didn't
-// need to be separate calculations after all.
-//
-// Uses the server's own local time. Fine while pilot stores are all in
-// roughly the same region; if that changes, this becomes a real design
-// question (which store's "yesterday" wins?) worth revisiting deliberately
-// rather than left as an accidental default.
+// A rolling window of `days` days ending *yesterday*. getLastCompleteWeekRange
+// below is kept as its own untouched function (rather than just calling
+// this with 7) specifically so nothing about Weekly's existing behavior
+// depends on a new, shared code path — it's its own copy, exactly as it
+// always has been.
+function getLastCompleteRange(days) {
+  const now = new Date();
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const start = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate() - (days - 1));
+  return { start, end: yesterday };
+}
+
 function getLastCompleteWeekRange() {
   const now = new Date();
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
@@ -62,10 +70,6 @@ function getLastCompleteWeekRange() {
   return { start, end: yesterday };
 }
 
-// Sum of units from sales entries whose *end date* falls within
-// [startStr, endStr] (inclusive) — same "attributed to the day it
-// ended" convention already used everywhere else. Comparing as plain
-// "YYYY-MM-DD" strings sidesteps timezone/precision boundary issues.
 function unitsSoldInRange(salesEntries, startStr, endStr) {
   return (salesEntries || [])
     .filter((e) => {
@@ -75,26 +79,7 @@ function unitsSoldInRange(salesEntries, startStr, endStr) {
     .reduce((sum, e) => sum + Number(e.units || 0), 0);
 }
 
-// The main entry point: everything the email template needs for one
-// store, already computed and shaped.
-async function getWeeklyReportData(storeId) {
-  const enrichedStyles = await getEnrichedStyles(storeId);
-  const { start, end } = getLastCompleteWeekRange();
-  const startStr = toLocalDateStr(start);
-  const endStr = toLocalDateStr(end);
-
-  const [vendorsRes, openPOsRes] = await Promise.all([
-    pool.query("SELECT id, name FROM vendors WHERE store_id = $1", [storeId]),
-    pool.query("SELECT count(*) FROM purchase_orders WHERE store_id = $1 AND status != 'closed'", [storeId]),
-  ]);
-  const vendorNameById = new Map(vendorsRes.rows.map((v) => [v.id, v.name]));
-  const openPOCount = Number(openPOsRes.rows[0].count);
-
-  // The reorder-slip alerts — same "needs attention" list the app's
-  // ticker shows at the top of every screen, worst first. Kept as its
-  // own list (using the real merged tier, matching the ticker exactly)
-  // so the email's top section is a faithful copy of what's already at
-  // the top of the app, not a re-derived approximation of it.
+function buildAlerts(enrichedStyles, vendorNameById) {
   const alerts = [];
   for (const style of enrichedStyles) {
     for (const variant of style.variants) {
@@ -110,12 +95,11 @@ async function getWeeklyReportData(storeId) {
     }
   }
   alerts.sort((a, b) => TIER_PRIORITY[b.tier] - TIER_PRIORITY[a.tier]);
+  return alerts;
+}
 
-  // The table body itself, further down, uses the real physical tier
-  // instead — see physicalTierFromStatus above for why these two
-  // sections of the same email deliberately use different tier
-  // definitions, matching the app's own Weekly Report tab exactly.
-  const groups = [...enrichedStyles]
+function buildGroups(enrichedStyles, computeSold, rateMode) {
+  return [...enrichedStyles]
     .sort((a, b) => {
       const worstA = a.variants.reduce((worst, v) => Math.max(worst, TIER_PRIORITY[physicalTierFromStatus(v.status)]), 0);
       const worstB = b.variants.reduce((worst, v) => Math.max(worst, TIER_PRIORITY[physicalTierFromStatus(v.status)]), 0);
@@ -129,22 +113,55 @@ async function getWeeklyReportData(storeId) {
           if (tierDiff !== 0) return tierDiff;
           return variantLabel(a).localeCompare(variantLabel(b));
         })
-        .map((v) => ({
-          label: variantLabel(v),
-          sku: v.sku,
-          stock: Number(v.stock),
-          soldLastWeek: unitsSoldInRange(v.sales, startStr, endStr),
-          rate: v.status.rate,
-          daysRemaining: v.status.daysRemaining,
-          tier: physicalTierFromStatus(v.status),
-          hasIncoming: Number(v.status.incoming || 0) > 0,
-        }));
+        .map((v) => {
+          const sold = computeSold(v);
+          let rate;
+          if (rateMode.mode === "status") rate = v.status.rate;
+          else if (rateMode.mode === "window") rate = rateMode.days > 0 ? sold / rateMode.days : 0;
+          else rate = rateMode.getRate(v);
+          return {
+            label: variantLabel(v),
+            sku: v.sku,
+            stock: Number(v.stock),
+            sold,
+            rate,
+            daysRemaining: v.status.daysRemaining,
+            tier: physicalTierFromStatus(v.status),
+            hasIncoming: Number(v.status.incoming || 0) > 0,
+          };
+        });
       return { name: style.name, variants };
     });
+}
 
+async function getVendorAndPOInfo(storeId) {
+  const [vendorsRes, openPOsRes] = await Promise.all([
+    pool.query("SELECT id, name FROM vendors WHERE store_id = $1", [storeId]),
+    pool.query("SELECT count(*) FROM purchase_orders WHERE store_id = $1 AND status != 'closed'", [storeId]),
+  ]);
+  return {
+    vendorNameById: new Map(vendorsRes.rows.map((v) => [v.id, v.name])),
+    openPOCount: Number(openPOsRes.rows[0].count),
+  };
+}
+
+async function getWeeklyReportData(storeId) {
+  const enrichedStyles = await getEnrichedStyles(storeId);
+  const { start, end } = getLastCompleteWeekRange();
+  const startStr = toLocalDateStr(start);
+  const endStr = toLocalDateStr(end);
+
+  const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
+  const alerts = buildAlerts(enrichedStyles, vendorNameById);
+  const groups = buildGroups(enrichedStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr), { mode: "status" });
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
 
   return {
+    reportLabel: "Weekly Report",
+    rangeStart: startStr,
+    rangeEnd: endStr,
+    rangeStartDisplay: formatDisplayDate(startStr),
+    rangeEndDisplay: formatDisplayDate(endStr),
     weekStart: startStr,
     weekEnd: endStr,
     weekStartDisplay: formatDisplayDate(startStr),
@@ -157,4 +174,66 @@ async function getWeeklyReportData(storeId) {
   };
 }
 
-module.exports = { getWeeklyReportData, getLastCompleteWeekRange, toLocalDateStr };
+async function getMonthlyReportData(storeId) {
+  const enrichedStyles = await getEnrichedStyles(storeId);
+  const { start, end } = getLastCompleteRange(30);
+  const startStr = toLocalDateStr(start);
+  const endStr = toLocalDateStr(end);
+
+  const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
+  const alerts = buildAlerts(enrichedStyles, vendorNameById);
+  const groups = buildGroups(enrichedStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr), { mode: "window", days: 30 });
+  const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
+
+  return {
+    reportLabel: "Monthly Report",
+    rangeStart: startStr,
+    rangeEnd: endStr,
+    rangeStartDisplay: formatDisplayDate(startStr),
+    rangeEndDisplay: formatDisplayDate(endStr),
+    groups,
+    totalVariants,
+    totalStyles: enrichedStyles.length,
+    openPOCount,
+    alerts,
+  };
+}
+
+async function getImmediateReportData(storeId, items) {
+  const enrichedStyles = await getEnrichedStyles(storeId);
+  const soldByVariantId = new Map(items.map((it) => [it.variantId, it]));
+
+  const filteredStyles = enrichedStyles
+    .map((style) => ({ ...style, variants: style.variants.filter((v) => soldByVariantId.has(v.id)) }))
+    .filter((style) => style.variants.length > 0);
+
+  const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
+  const alerts = buildAlerts(enrichedStyles, vendorNameById);
+  const groups = buildGroups(
+    filteredStyles,
+    (v) => soldByVariantId.get(v.id)?.sold ?? 0,
+    { mode: "captured", getRate: (v) => {
+      const it = soldByVariantId.get(v.id);
+      return it && it.days > 0 ? it.sold / it.days : 0;
+    } }
+  );
+  const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
+
+  return {
+    reportLabel: "Immediate Report",
+    groups,
+    totalVariants,
+    totalStyles: filteredStyles.length,
+    openPOCount,
+    alerts,
+  };
+}
+
+module.exports = {
+  getWeeklyReportData,
+  getMonthlyReportData,
+  getImmediateReportData,
+  getLastCompleteWeekRange,
+  getLastCompleteRange,
+  toLocalDateStr,
+};

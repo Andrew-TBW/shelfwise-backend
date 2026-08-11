@@ -140,7 +140,7 @@ function renderGroup(group) {
       <tr>
         ${td(`${escapeHtml(v.label)}<br/><span style="font-size:10px; color:${COLORS.monoGray};">${escapeHtml(v.sku)}</span>`)}
         ${td(v.stock, true)}
-        ${td(v.soldLastWeek, true)}
+        ${td(v.sold, true)}
         ${td(v.rate > 0 ? v.rate.toFixed(2) : "—", true)}
         ${td(v.daysRemaining !== null ? Math.floor(v.daysRemaining) : "—", true)}
         <td style="padding:6px 8px; border-bottom:1px dashed ${COLORS.line}; font-size:12px;">
@@ -153,8 +153,11 @@ function renderGroup(group) {
   return headerRow + rows;
 }
 
-function renderWeeklyReportEmail(storeName, report) {
-  const { weekStartDisplay, weekEndDisplay, groups, totalVariants } = report;
+// General-purpose render, shared by all three report types — same
+// ticker, same grouped table, just a different title/date-range label
+// depending on which report this is.
+function renderReportEmail(storeName, report, { rangeLabel } = {}) {
+  const { reportLabel, groups, totalVariants } = report;
 
   const bodyRows =
     totalVariants === 0
@@ -180,8 +183,8 @@ function renderWeeklyReportEmail(storeName, report) {
           </tr>
           <tr>
             <td style="padding:8px 24px 8px;">
-              <div style="font-family:Georgia, serif; font-weight:bold; font-size:16px; color:${COLORS.ink};">Weekly Report</div>
-              <div style="font-size:12px; color:${COLORS.monoGray}; font-family:monospace;">${weekStartDisplay} – ${weekEndDisplay}</div>
+              <div style="font-family:Georgia, serif; font-weight:bold; font-size:16px; color:${COLORS.ink};">${escapeHtml(reportLabel)}</div>
+              ${rangeLabel ? `<div style="font-size:12px; color:${COLORS.monoGray}; font-family:monospace;">${escapeHtml(rangeLabel)}</div>` : ""}
             </td>
           </tr>
           <tr>
@@ -199,4 +202,19 @@ function renderWeeklyReportEmail(storeName, report) {
 </html>`;
 }
 
-module.exports = { renderWeeklyReportEmail };
+// Kept as its own named function, calling straight through to the
+// general one — anything that already imports renderWeeklyReportEmail
+// by name keeps working exactly as before.
+function renderWeeklyReportEmail(storeName, report) {
+  return renderReportEmail(storeName, report, { rangeLabel: `${report.weekStartDisplay} – ${report.weekEndDisplay}` });
+}
+
+function renderMonthlyReportEmail(storeName, report) {
+  return renderReportEmail(storeName, report, { rangeLabel: `${report.rangeStartDisplay} – ${report.rangeEndDisplay}` });
+}
+
+function renderImmediateReportEmail(storeName, report) {
+  return renderReportEmail(storeName, report, { rangeLabel: null });
+}
+
+module.exports = { renderWeeklyReportEmail, renderMonthlyReportEmail, renderImmediateReportEmail, renderReportEmail };

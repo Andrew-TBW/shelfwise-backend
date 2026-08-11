@@ -319,6 +319,25 @@ router.post(
   })
 );
 
+router.post(
+  "/:id/set-stock",
+  asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    const { stock } = req.body;
+    if (!(Number.isInteger(Number(stock)) && Number(stock) >= 0)) {
+      return res.status(400).json({ error: "stock must be a whole number of 0 or more" });
+    }
+
+    const { rows, rowCount } = await pool.query(
+      `UPDATE variants SET stock = $1, updated_at = now()
+       WHERE id = $2 AND store_id = $3 RETURNING stock`,
+      [Number(stock), id, req.storeId]
+    );
+    if (rowCount === 0) return res.status(404).json({ error: "Variant not found" });
+    res.json({ newStock: rows[0].stock });
+  })
+);
+
 function toDateStr(v) {
   if (!v) return v;
   return typeof v === "string" ? v.slice(0, 10) : new Date(v).toISOString().slice(0, 10);
