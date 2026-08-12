@@ -2,27 +2,20 @@
 //
 // Computes report data for the app's three report types — Weekly,
 // Monthly, and Immediate — all built on the same getEnrichedStyles()
-// and reorderLogic.js math the live Shelf tab uses, so nothing here
-// duplicates that logic independently.
+// and reorderLogic.js math the live Shelf tab uses.
 //
-// Weekly and Monthly share the same shape (grouped by style, worst
-// physical tier first) over a rolling window ending yesterday — the
-// only real difference is the window length, and one deliberate
-// choice: Weekly's "Rate / day" column keeps showing the same
-// general-purpose reorder velocity it always has (v.status.rate,
-// which is itself roughly a 30-day rate under the hood) — left
-// completely untouched from before this feature existed. Monthly's
-// "Rate / day" is instead computed strictly from what was actually
-// sold within ITS OWN 30-day window (sold ÷ 30), so it genuinely
-// reflects that specific window the way the report claims to, rather
-// than reusing a number that happens to be close to it by coincidence.
+// Rate is shown as two separate, uniform columns across all three
+// report types — "30-day avg." (computeDailyRate, recent-preferring)
+// and "All-time avg." (computeAllTimeRate, full history) — both pulled
+// straight from the variant's own status, the same numbers regardless
+// of which report you're looking at. Only "Sold" stays report-specific
+// (each report's own window, or Immediate's captured value).
 //
-// Immediate is structurally different: it's not a time window at
-// all, but a *specific list* of variants (whichever ones were part of
-// the most recent Voice Count or Count Sheet submission) — that list
-// lives only in frontend session memory, so the caller has to supply
-// it; there's nothing in the database that could reconstruct "the
-// most recent batch" on its own.
+// Immediate is structurally different from the other two: it's not a
+// time window at all, but a specific list of variants (whichever ones
+// were part of the most recent Voice Count or Count Sheet submission)
+// — that list lives only in frontend session memory, so the caller has
+// to supply it.
 
 const pool = require("./db");
 const { getEnrichedStyles } = require("./enrichedStyles");
@@ -51,11 +44,6 @@ function physicalTierFromStatus(status) {
   return "healthy";
 }
 
-// A rolling window of `days` days ending *yesterday*. getLastCompleteWeekRange
-// below is kept as its own untouched function (rather than just calling
-// this with 7) specifically so nothing about Weekly's existing behavior
-// depends on a new, shared code path — it's its own copy, exactly as it
-// always has been.
 function getLastCompleteRange(days) {
   const now = new Date();
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
@@ -98,7 +86,11 @@ function buildAlerts(enrichedStyles, vendorNameById) {
   return alerts;
 }
 
-function buildGroups(enrichedStyles, computeSold, rateMode) {
+// `rate30Day` and `rateAllTime` come straight from computeVariantStatus
+// now — uniform across every report type, rather than each report
+// computing its own notion of "rate." Only `sold` stays report-specific
+// (each report's own window, or Immediate's captured value).
+function buildGroups(enrichedStyles, computeSold) {
   return [...enrichedStyles]
     .sort((a, b) => {
       const worstA = a.variants.reduce((worst, v) => Math.max(worst, TIER_PRIORITY[physicalTierFromStatus(v.status)]), 0);
@@ -113,23 +105,17 @@ function buildGroups(enrichedStyles, computeSold, rateMode) {
           if (tierDiff !== 0) return tierDiff;
           return variantLabel(a).localeCompare(variantLabel(b));
         })
-        .map((v) => {
-          const sold = computeSold(v);
-          let rate;
-          if (rateMode.mode === "status") rate = v.status.rate;
-          else if (rateMode.mode === "window") rate = rateMode.days > 0 ? sold / rateMode.days : 0;
-          else rate = rateMode.getRate(v);
-          return {
-            label: variantLabel(v),
-            sku: v.sku,
-            stock: Number(v.stock),
-            sold,
-            rate,
-            daysRemaining: v.status.daysRemaining,
-            tier: physicalTierFromStatus(v.status),
-            hasIncoming: Number(v.status.incoming || 0) > 0,
-          };
-        });
+        .map((v) => ({
+          label: variantLabel(v),
+          sku: v.sku,
+          stock: Number(v.stock),
+          sold: computeSold(v),
+          rate30Day: v.status.rate30Day,
+          rateAllTime: v.status.rate,
+          daysRemaining: v.status.daysRemaining,
+          tier: physicalTierFromStatus(v.status),
+          hasIncoming: Number(v.status.incoming || 0) > 0,
+        }));
       return { name: style.name, variants };
     });
 }
@@ -153,7 +139,7 @@ async function getWeeklyReportData(storeId) {
 
   const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
   const alerts = buildAlerts(enrichedStyles, vendorNameById);
-  const groups = buildGroups(enrichedStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr), { mode: "status" });
+  const groups = buildGroups(enrichedStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr));
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
 
   return {
@@ -182,7 +168,7 @@ async function getMonthlyReportData(storeId) {
 
   const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
   const alerts = buildAlerts(enrichedStyles, vendorNameById);
-  const groups = buildGroups(enrichedStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr), { mode: "window", days: 30 });
+  const groups = buildGroups(enrichedStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr));
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
 
   return {
@@ -209,14 +195,7 @@ async function getImmediateReportData(storeId, items) {
 
   const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
   const alerts = buildAlerts(enrichedStyles, vendorNameById);
-  const groups = buildGroups(
-    filteredStyles,
-    (v) => soldByVariantId.get(v.id)?.sold ?? 0,
-    { mode: "captured", getRate: (v) => {
-      const it = soldByVariantId.get(v.id);
-      return it && it.days > 0 ? it.sold / it.days : 0;
-    } }
-  );
+  const groups = buildGroups(filteredStyles, (v) => soldByVariantId.get(v.id)?.sold ?? 0);
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
 
   return {

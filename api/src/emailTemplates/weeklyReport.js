@@ -118,12 +118,12 @@ const th = (label) =>
 function renderGroup(group) {
   const headerRow = `
     <tr>
-      <td colspan="6" style="padding:16px 8px 6px; font-family:Georgia, serif; font-weight:bold; font-size:14px; color:${COLORS.ink}; border-top:1px dashed ${COLORS.line};">
+      <td colspan="7" style="padding:16px 8px 6px; font-family:Georgia, serif; font-weight:bold; font-size:14px; color:${COLORS.ink}; border-top:1px dashed ${COLORS.line};">
         ${escapeHtml(group.name)}
       </td>
     </tr>
     <tr>
-      ${th("Variant")}${th("Inventory")}${th("Sold")}${th("Rate / day")}${th("Days left")}${th("Status")}
+      ${th("Variant")}${th("Inventory")}${th("Sold")}${th("30-day avg.")}${th("All-time avg.")}${th("Days left")}${th("Status")}
     </tr>`;
 
   const rows = group.variants
@@ -141,7 +141,8 @@ function renderGroup(group) {
         ${td(`${escapeHtml(v.label)}<br/><span style="font-size:10px; color:${COLORS.monoGray};">${escapeHtml(v.sku)}</span>`)}
         ${td(v.stock, true)}
         ${td(v.sold, true)}
-        ${td(v.rate > 0 ? v.rate.toFixed(2) : "—", true)}
+        ${td(v.rate30Day > 0 ? `${v.rate30Day.toFixed(2)}/day` : "—", true)}
+        ${td(v.rateAllTime > 0 ? `${v.rateAllTime.toFixed(2)}/day` : "—", true)}
         ${td(v.daysRemaining !== null ? Math.floor(v.daysRemaining) : "—", true)}
         <td style="padding:6px 8px; border-bottom:1px dashed ${COLORS.line}; font-size:12px;">
           <span style="font-weight:bold; color:${meta.color};">${meta.label}</span>${onOrderNote}
@@ -161,7 +162,7 @@ function renderReportEmail(storeName, report, { rangeLabel } = {}) {
 
   const bodyRows =
     totalVariants === 0
-      ? `<tr><td colspan="6" style="padding:30px 8px; text-align:center; color:${COLORS.monoGray}; font-size:13px;">No styles on the shelf yet — nothing to report.</td></tr>`
+      ? `<tr><td colspan="7" style="padding:30px 8px; text-align:center; color:${COLORS.monoGray}; font-size:13px;">No styles on the shelf yet — nothing to report.</td></tr>`
       : groups.map(renderGroup).join("");
 
   return `<!DOCTYPE html>
