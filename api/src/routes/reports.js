@@ -2,8 +2,8 @@
 const express = require("express");
 const pool = require("../db");
 const asyncHandler = require("../middleware/asyncHandler");
-const { getWeeklyReportData, getMonthlyReportData, getImmediateReportData } = require("../reportData");
-const { renderWeeklyReportEmail, renderMonthlyReportEmail, renderImmediateReportEmail } = require("../emailTemplates/weeklyReport");
+const { getWeeklyReportData, getMonthlyReportData, getImmediateReportData, getMovementReportData } = require("../reportData");
+const { renderWeeklyReportEmail, renderMonthlyReportEmail, renderImmediateReportEmail, renderMovementReportEmail } = require("../emailTemplates/weeklyReport");
 const { sendEmail } = require("../emailSender");
 
 const router = express.Router();
@@ -74,6 +74,21 @@ router.post(
       getReport: () => getImmediateReportData(req.storeId, items),
       renderEmail: renderImmediateReportEmail,
       subjectLabel: () => "Immediate Report",
+    });
+  })
+);
+
+router.post(
+  "/movement/:tier/send",
+  asyncHandler(async (req, res) => {
+    const { tier } = req.params;
+    if (!["fast", "slow"].includes(tier)) {
+      return res.status(400).json({ error: "tier must be 'fast' or 'slow'" });
+    }
+    await sendReportNow(req, res, {
+      getReport: () => getMovementReportData(req.storeId, tier),
+      renderEmail: renderMovementReportEmail,
+      subjectLabel: (r) => `${r.reportLabel} (${r.rangeStartDisplay} – ${r.rangeEndDisplay})`,
     });
   })
 );

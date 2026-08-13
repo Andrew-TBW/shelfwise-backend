@@ -21,7 +21,7 @@ router.get(
 router.post(
   "/",
   asyncHandler(async (req, res) => {
-    const { name, category, vendorId, leadTimeDays, targetDays, marginTier, variants } = req.body;
+    const { name, category, vendorId, leadTimeDays, targetDays, marginTier, movementTier, variants } = req.body;
 
     if (!name || !name.trim()) return res.status(400).json({ error: "name is required" });
     if (!vendorId) return res.status(400).json({ error: "vendorId is required" });
@@ -31,6 +31,9 @@ router.post(
     if (marginTier !== undefined && marginTier !== null && !["high", "mid", "low"].includes(marginTier)) {
       return res.status(400).json({ error: "marginTier must be high, mid, low, or omitted" });
     }
+    if (movementTier !== undefined && movementTier !== null && !["fast", "slow"].includes(movementTier)) {
+      return res.status(400).json({ error: "movementTier must be fast, slow, or omitted" });
+    }
 
     const client = await pool.connect();
     try {
@@ -38,9 +41,9 @@ router.post(
       await itemNumbers.lockStoreVariants(client, req.storeId);
 
       const styleRes = await client.query(
-        `INSERT INTO styles (store_id, vendor_id, name, category, lead_time_days, target_days, margin_tier)
-         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-        [req.storeId, vendorId, name.trim(), category || "", Number(leadTimeDays) || 7, Number(targetDays) || 14, marginTier || null]
+        `INSERT INTO styles (store_id, vendor_id, name, category, lead_time_days, target_days, margin_tier, movement_tier)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+        [req.storeId, vendorId, name.trim(), category || "", Number(leadTimeDays) || 7, Number(targetDays) || 14, marginTier || null, movementTier || null]
       );
       const styleId = styleRes.rows[0].id;
 
@@ -72,14 +75,17 @@ router.post(
 );
 
 // PATCH /api/styles/:id — update style info/settings (name, category,
-// vendor, lead time, target days, margin tier). Matches EditStyleModal's
-// "Save changes".
+// vendor, lead time, target days, margin tier, movement tier). Matches
+// EditStyleModal's "Save changes".
 router.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
     if (req.body.marginTier !== undefined && req.body.marginTier !== null && !["high", "mid", "low"].includes(req.body.marginTier)) {
       return res.status(400).json({ error: "marginTier must be high, mid, low, or null" });
+    }
+    if (req.body.movementTier !== undefined && req.body.movementTier !== null && !["fast", "slow"].includes(req.body.movementTier)) {
+      return res.status(400).json({ error: "movementTier must be fast, slow, or null" });
     }
     const fields = [];
     const values = [];
@@ -92,6 +98,7 @@ router.patch(
       leadTimeDays: "lead_time_days",
       targetDays: "target_days",
       marginTier: "margin_tier",
+      movementTier: "movement_tier",
     };
     for (const [bodyKey, column] of Object.entries(map)) {
       if (req.body[bodyKey] !== undefined) {

@@ -224,4 +224,10 @@ function renderImmediateReportEmail(storeName, report) {
   return renderReportEmail(storeName, report, { rangeLabel: null });
 }
 
-module.exports = { renderWeeklyReportEmail, renderMonthlyReportEmail, renderImmediateReportEmail, renderReportEmail };
+// Fast Movers / Slow Movers — same 30-day-window range label as
+// Monthly, since "Sold" here is computed the same way.
+function renderMovementReportEmail(storeName, report) {
+  return renderReportEmail(storeName, report, { rangeLabel: `${report.rangeStartDisplay} – ${report.rangeEndDisplay}` });
+}
+
+module.exports = { renderWeeklyReportEmail, renderMonthlyReportEmail, renderImmediateReportEmail, renderMovementReportEmail, renderReportEmail };

@@ -68,10 +68,6 @@ function buildAlerts(enrichedStyles, vendorNameById) {
   return alerts;
 }
 
-// `rate30Day` and `rateAllTime` come straight from computeVariantStatus,
-// uniform across every report type. `marginTier` is a style-level field
-// (never per-variant), carried through on the group itself rather than
-// each variant row.
 function buildGroups(enrichedStyles, computeSold) {
   return [...enrichedStyles]
     .sort((a, b) => {
@@ -190,10 +186,38 @@ async function getImmediateReportData(storeId, items) {
   };
 }
 
+async function getMovementReportData(storeId, tier) {
+  const enrichedStyles = await getEnrichedStyles(storeId);
+  const filteredStyles = enrichedStyles.filter((s) => s.movement_tier === tier);
+
+  const { start, end } = getLastCompleteRange(30);
+  const startStr = toLocalDateStr(start);
+  const endStr = toLocalDateStr(end);
+
+  const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
+  const alerts = buildAlerts(enrichedStyles, vendorNameById);
+  const groups = buildGroups(filteredStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr));
+  const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
+
+  return {
+    reportLabel: tier === "fast" ? "Fast Movers" : "Slow Movers",
+    rangeStart: startStr,
+    rangeEnd: endStr,
+    rangeStartDisplay: formatDisplayDate(startStr),
+    rangeEndDisplay: formatDisplayDate(endStr),
+    groups,
+    totalVariants,
+    totalStyles: filteredStyles.length,
+    openPOCount,
+    alerts,
+  };
+}
+
 module.exports = {
   getWeeklyReportData,
   getMonthlyReportData,
   getImmediateReportData,
+  getMovementReportData,
   getLastCompleteWeekRange,
   getLastCompleteRange,
   toLocalDateStr,
