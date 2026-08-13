@@ -7,14 +7,6 @@ const itemNumbers = require("../itemNumbers");
 
 const router = express.Router();
 
-// GET /api/styles — every style for this store, with variants, sales,
-// incoming quantity, and computed reorder status already attached.
-// This is the single call the Shelf tab needs on load.
-//
-// GET /api/styles?includeInactive=true also returns deactivated styles
-// and variants (each tagged with isActive) — used by the Shelf tab's
-// "show inactive" toggle. Every other existing caller is unaffected,
-// since this defaults to false.
 router.get(
   "/",
   asyncHandler(async (req, res) => {
@@ -29,12 +21,15 @@ router.get(
 router.post(
   "/",
   asyncHandler(async (req, res) => {
-    const { name, category, vendorId, leadTimeDays, targetDays, variants } = req.body;
+    const { name, category, vendorId, leadTimeDays, targetDays, marginTier, variants } = req.body;
 
     if (!name || !name.trim()) return res.status(400).json({ error: "name is required" });
     if (!vendorId) return res.status(400).json({ error: "vendorId is required" });
     if (!Array.isArray(variants) || variants.length === 0) {
       return res.status(400).json({ error: "at least one variant is required" });
+    }
+    if (marginTier !== undefined && marginTier !== null && !["high", "mid", "low"].includes(marginTier)) {
+      return res.status(400).json({ error: "marginTier must be high, mid, low, or omitted" });
     }
 
     const client = await pool.connect();
@@ -43,17 +38,12 @@ router.post(
       await itemNumbers.lockStoreVariants(client, req.storeId);
 
       const styleRes = await client.query(
-        `INSERT INTO styles (store_id, vendor_id, name, category, lead_time_days, target_days)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-        [req.storeId, vendorId, name.trim(), category || "", Number(leadTimeDays) || 7, Number(targetDays) || 14]
+        `INSERT INTO styles (store_id, vendor_id, name, category, lead_time_days, target_days, margin_tier)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [req.storeId, vendorId, name.trim(), category || "", Number(leadTimeDays) || 7, Number(targetDays) || 14, marginTier || null]
       );
       const styleId = styleRes.rows[0].id;
 
-      // A brand new style always gets appended after everything else —
-      // there's no existing block for it to slot into, so no shifting
-      // is needed for this case at all. Its OWN initial variants still
-      // land in color-then-size order relative to each other, though,
-      // regardless of what order they were typed into the form.
       const assignedNumbers = await itemNumbers.appendNewStyleNumbers(
         client,
         req.storeId,
@@ -82,11 +72,15 @@ router.post(
 );
 
 // PATCH /api/styles/:id — update style info/settings (name, category,
-// vendor, lead time, target days). Matches EditStyleModal's "Save changes".
+// vendor, lead time, target days, margin tier). Matches EditStyleModal's
+// "Save changes".
 router.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
+    if (req.body.marginTier !== undefined && req.body.marginTier !== null && !["high", "mid", "low"].includes(req.body.marginTier)) {
+      return res.status(400).json({ error: "marginTier must be high, mid, low, or null" });
+    }
     const fields = [];
     const values = [];
     let i = 1;
@@ -97,6 +91,7 @@ router.patch(
       vendorId: "vendor_id",
       leadTimeDays: "lead_time_days",
       targetDays: "target_days",
+      marginTier: "margin_tier",
     };
     for (const [bodyKey, column] of Object.entries(map)) {
       if (req.body[bodyKey] !== undefined) {
@@ -118,17 +113,7 @@ router.patch(
   })
 );
 
-// DELETE /api/styles/:id — deactivates the style (matches the "Remove
-// style" action, behind edit mode + confirmation in the frontend). This
-// is a soft delete, not a real one: the row stays, deactivated_at gets
-// set, and it can be brought back later via the reactivate endpoint
-// below. Deliberately does NOT touch the style's variant rows — a
-// variant is treated as inactive if either it or its style has
-// deactivated_at set, so this stays a single-row update either way.
-//
-// Since nothing is actually being removed, this can no longer be
-// blocked by a variant being referenced on a purchase order — that
-// restriction only ever applied to real deletion.
+// DELETE /api/styles/:id — deactivates the style.
 router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
@@ -147,8 +132,6 @@ router.delete(
         return res.status(404).json({ error: "Style not found, or already inactive" });
       }
 
-      // Frees up every one of this style's currently-numbered variants
-      // from the active count-sheet sequence, closing the gaps.
       await itemNumbers.releaseStyleNumbers(client, req.storeId, id);
 
       await client.query("COMMIT");
@@ -181,9 +164,6 @@ router.post(
         return res.status(404).json({ error: "Style not found, or already active" });
       }
 
-      // Gives a fresh number to every variant that's coming back purely
-      // because this style is — anything separately deactivated on its
-      // own stays numberless until it's reactivated individually too.
       await itemNumbers.reclaimStyleNumbers(client, req.storeId, id);
 
       await client.query("COMMIT");
@@ -197,8 +177,7 @@ router.post(
   })
 );
 
-// POST /api/styles/:styleId/variants — add a variant to an existing
-// style. Matches the inline "Add variant" row on the shelf card.
+// POST /api/styles/:styleId/variants — add a variant to an existing style.
 router.post(
   "/:styleId/variants",
   asyncHandler(async (req, res) => {

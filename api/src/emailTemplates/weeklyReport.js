@@ -25,6 +25,11 @@ const TIER_META = {
   unknown: { label: "No sales logged", color: COLORS.monoGray },
 };
 
+// Plain, neutral labels — margin tier isn't an urgency signal like the
+// stock-status tiers above, so it deliberately doesn't borrow their
+// red/amber/green coloring.
+const MARGIN_TIER_LABELS = { high: "High margin", mid: "Mid margin", low: "Low margin" };
+
 function escapeHtml(str) {
   return String(str ?? "")
     .replace(/&/g, "&amp;")
@@ -116,10 +121,11 @@ const th = (label) =>
   `<th style="text-align:left; font-size:10px; letter-spacing:0.03em; color:${COLORS.monoGray}; padding:4px 8px; border-bottom:1px solid ${COLORS.line};">${label}</th>`;
 
 function renderGroup(group) {
+  const marginLabel = group.marginTier ? MARGIN_TIER_LABELS[group.marginTier] : null;
   const headerRow = `
     <tr>
       <td colspan="7" style="padding:16px 8px 6px; font-family:Georgia, serif; font-weight:bold; font-size:14px; color:${COLORS.ink}; border-top:1px dashed ${COLORS.line};">
-        ${escapeHtml(group.name)}
+        ${escapeHtml(group.name)}${marginLabel ? ` <span style="font-family:Arial, Helvetica, sans-serif; font-weight:normal; font-size:11px; color:${COLORS.monoGray};">(${marginLabel})</span>` : ""}
       </td>
     </tr>
     <tr>

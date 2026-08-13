@@ -94,17 +94,22 @@ router.post(
   })
 );
 
-// DELETE /api/purchase-orders/:id — only allowed while still a draft,
-// matching the frontend's deletePO guard.
+// DELETE /api/purchase-orders/:id — allowed for 'draft' and 'submitted'
+// only. Both statuses guarantee zero stock has been received yet
+// (the only way out of 'submitted' is receiving something, which
+// immediately moves the status to 'partially_received' or 'received') —
+// so deleting here is always completely safe, nothing to reverse.
+// Once any receiving has happened, deletion is blocked; the PO has to
+// be closed instead, so the receiving history stays intact.
 router.delete(
   "/:id",
   asyncHandler(async (req, res) => {
     const { rowCount } = await pool.query(
-      "DELETE FROM purchase_orders WHERE id = $1 AND store_id = $2 AND status = 'draft'",
+      "DELETE FROM purchase_orders WHERE id = $1 AND store_id = $2 AND status IN ('draft', 'submitted')",
       [req.params.id, req.storeId]
     );
     if (rowCount === 0) {
-      return res.status(409).json({ error: "PO not found, or not in draft status" });
+      return res.status(409).json({ error: "PO not found, or already has received stock — close it instead of deleting." });
     }
     res.json({ ok: true });
   })

@@ -1,22 +1,4 @@
 // reportData.js
-//
-// Computes report data for the app's three report types — Weekly,
-// Monthly, and Immediate — all built on the same getEnrichedStyles()
-// and reorderLogic.js math the live Shelf tab uses.
-//
-// Rate is shown as two separate, uniform columns across all three
-// report types — "30-day avg." (computeDailyRate, recent-preferring)
-// and "All-time avg." (computeAllTimeRate, full history) — both pulled
-// straight from the variant's own status, the same numbers regardless
-// of which report you're looking at. Only "Sold" stays report-specific
-// (each report's own window, or Immediate's captured value).
-//
-// Immediate is structurally different from the other two: it's not a
-// time window at all, but a specific list of variants (whichever ones
-// were part of the most recent Voice Count or Count Sheet submission)
-// — that list lives only in frontend session memory, so the caller has
-// to supply it.
-
 const pool = require("./db");
 const { getEnrichedStyles } = require("./enrichedStyles");
 const { TIER_PRIORITY } = require("./reorderLogic");
@@ -86,10 +68,10 @@ function buildAlerts(enrichedStyles, vendorNameById) {
   return alerts;
 }
 
-// `rate30Day` and `rateAllTime` come straight from computeVariantStatus
-// now — uniform across every report type, rather than each report
-// computing its own notion of "rate." Only `sold` stays report-specific
-// (each report's own window, or Immediate's captured value).
+// `rate30Day` and `rateAllTime` come straight from computeVariantStatus,
+// uniform across every report type. `marginTier` is a style-level field
+// (never per-variant), carried through on the group itself rather than
+// each variant row.
 function buildGroups(enrichedStyles, computeSold) {
   return [...enrichedStyles]
     .sort((a, b) => {
@@ -116,7 +98,7 @@ function buildGroups(enrichedStyles, computeSold) {
           tier: physicalTierFromStatus(v.status),
           hasIncoming: Number(v.status.incoming || 0) > 0,
         }));
-      return { name: style.name, variants };
+      return { name: style.name, marginTier: style.margin_tier, variants };
     });
 }
 
