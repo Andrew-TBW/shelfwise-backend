@@ -13,7 +13,19 @@ async function sendEmail({ to, subject, html }) {
     throw new Error("REPORT_FROM_EMAIL is not set — add it to .env before sending real email.");
   }
   const resend = new Resend(process.env.RESEND_API_KEY);
-  return resend.emails.send({ from: process.env.REPORT_FROM_EMAIL, to, subject, html });
+  const result = await resend.emails.send({ from: process.env.REPORT_FROM_EMAIL, to, subject, html });
+  // The Resend SDK doesn't reject the promise for an API-level failure
+  // (a bad key, a rate limit, a rejected recipient, etc.) — it resolves
+  // normally with { data: null, error: {...} } and just logs to
+  // stderr on its own. Left unchecked, every caller of this function
+  // — both the scheduled scripts and the "Send report now" buttons —
+  // would treat that as a successful send. Checking here and throwing
+  // a real error is what makes their existing try/catch logic (and
+  // the sent/failed counts they report) actually trustworthy.
+  if (result?.error) {
+    throw new Error(result.error.message || "Resend rejected this email.");
+  }
+  return result;
 }
 
 module.exports = { sendEmail };
