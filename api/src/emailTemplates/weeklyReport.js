@@ -29,6 +29,7 @@ const TIER_META = {
 // stock-status tiers above, so it deliberately doesn't borrow their
 // red/amber/green coloring.
 const MARGIN_TIER_LABELS = { high: "High margin", mid: "Mid margin", low: "Low margin" };
+const MOVEMENT_TIER_LABELS = { fast: "Fast-moving", slow: "Slow-moving" };
 
 function escapeHtml(str) {
   return String(str ?? "")
@@ -120,12 +121,23 @@ function renderTickerBlock(report) {
 const th = (label) =>
   `<th style="text-align:left; font-size:10px; letter-spacing:0.03em; color:${COLORS.monoGray}; padding:4px 8px; border-bottom:1px solid ${COLORS.line};">${label}</th>`;
 
-function renderGroup(group) {
-  const marginLabel = group.marginTier ? MARGIN_TIER_LABELS[group.marginTier] : null;
+function renderGroup(group, showSpeed) {
+  // "N/A" for an unclassified style, rather than any kind of "?"
+  // placeholder — these are two independent, owner-set
+  // classifications, so one being unset doesn't imply anything about
+  // the other.
+  const marginLabel = group.marginTier ? MARGIN_TIER_LABELS[group.marginTier] : "N/A";
+  const speedLabel = group.movementTier ? MOVEMENT_TIER_LABELS[group.movementTier] : "N/A";
+  // Not shown on Fast Movers / Slow Movers emails — every style there
+  // already IS that speed by definition, so repeating it on every
+  // single group would be pure noise with no new information.
+  const speedAnnotation = showSpeed
+    ? ` <span style="font-family:Arial, Helvetica, sans-serif; font-weight:normal; font-size:11px; color:${COLORS.monoGray};">· ${speedLabel}</span>`
+    : "";
   const headerRow = `
     <tr>
       <td colspan="7" style="padding:16px 8px 6px; font-family:Georgia, serif; font-weight:bold; font-size:14px; color:${COLORS.ink}; border-top:1px dashed ${COLORS.line};">
-        ${escapeHtml(group.name)}${marginLabel ? ` <span style="font-family:Arial, Helvetica, sans-serif; font-weight:normal; font-size:11px; color:${COLORS.monoGray};">(${marginLabel})</span>` : ""}
+        ${escapeHtml(group.name)} <span style="font-family:Arial, Helvetica, sans-serif; font-weight:normal; font-size:11px; color:${COLORS.monoGray};">(${marginLabel})</span>${speedAnnotation}
       </td>
     </tr>
     <tr>
@@ -160,16 +172,19 @@ function renderGroup(group) {
   return headerRow + rows;
 }
 
-// General-purpose render, shared by all three report types — same
-// ticker, same grouped table, just a different title/date-range label
-// depending on which report this is.
-function renderReportEmail(storeName, report, { rangeLabel } = {}) {
+// General-purpose render, shared by all report types — same ticker,
+// same grouped table, just a different title/date-range label (and
+// whether the speed annotation shows) depending on which report this
+// is. showSpeed defaults true — only the two movement-based reports
+// (Fast Movers / Slow Movers) turn it off, since it'd be redundant
+// there.
+function renderReportEmail(storeName, report, { rangeLabel, showSpeed = true } = {}) {
   const { reportLabel, groups, totalVariants } = report;
 
   const bodyRows =
     totalVariants === 0
       ? `<tr><td colspan="7" style="padding:30px 8px; text-align:center; color:${COLORS.monoGray}; font-size:13px;">No styles on the shelf yet — nothing to report.</td></tr>`
-      : groups.map(renderGroup).join("");
+      : groups.map((g) => renderGroup(g, showSpeed)).join("");
 
   return `<!DOCTYPE html>
 <html>
@@ -227,7 +242,10 @@ function renderImmediateReportEmail(storeName, report) {
 // Fast Movers / Slow Movers — same 30-day-window range label as
 // Monthly, since "Sold" here is computed the same way.
 function renderMovementReportEmail(storeName, report) {
-  return renderReportEmail(storeName, report, { rangeLabel: `${report.rangeStartDisplay} – ${report.rangeEndDisplay}` });
+  return renderReportEmail(storeName, report, {
+    rangeLabel: `${report.rangeStartDisplay} – ${report.rangeEndDisplay}`,
+    showSpeed: false,
+  });
 }
 
 module.exports = { renderWeeklyReportEmail, renderMonthlyReportEmail, renderImmediateReportEmail, renderMovementReportEmail, renderReportEmail };

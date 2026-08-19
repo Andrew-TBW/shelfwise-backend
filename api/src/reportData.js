@@ -94,7 +94,7 @@ function buildGroups(enrichedStyles, computeSold) {
           tier: physicalTierFromStatus(v.status),
           hasIncoming: Number(v.status.incoming || 0) > 0,
         }));
-      return { name: style.name, marginTier: style.margin_tier, variants };
+      return { name: style.name, marginTier: style.margin_tier, movementTier: style.movement_tier, variants };
     });
 }
 
