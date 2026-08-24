@@ -75,13 +75,28 @@ router.get(
 );
 
 // PATCH /api/logs/:id — correct "what was counted" for one specific
-// log entry. Editing this one value can ripple in two directions:
+// log entry. Editing this one value can ripple in three directions:
 //   1. THIS entry's own units (sold between the PREVIOUS count and
 //      this one) shifts, since it's derived from (previous count -
-//      this count).
+//      this count). Derived from THIS entry's own prior units +
+//      resulting_stock, not from the previous row's resulting_stock —
+//      that prior row frequently won't have one recorded at all (it
+//      may predate this feature entirely), but the relationship
+//      baked into this entry's own numbers at the moment it was first
+//      logged is always available and always correct, regardless of
+//      what the row before it does or doesn't have on record.
 //   2. The NEXT entry's own units (sold between this count and the
 //      next one) also shifts, for the same reason in the other
-//      direction.
+//      direction — this one genuinely does need the next row's own
+//      resulting_stock to be known, since there's no other baseline
+//      to derive it from.
+//   3. If the edited entry (or, after step 2, the next one) turns out
+//      to be the MOST RECENT count for this variant, the still-open
+//      Immediate Report — which stores its own frozen "sold" number
+//      at submission time rather than reading sales_entries live —
+//      needs that number corrected too, or the correction would
+//      silently fail to reach the one screen most likely to be
+//      showing it right now.
 // If this is the most recent entry for the variant, there is no next
 // entry to adjust — the variant's live stock updates directly
 // instead, since that's what's actually reflected on the Products
@@ -118,48 +133,46 @@ router.patch(
         });
       }
 
-      // The immediately-previous and immediately-next entries for THIS
-      // variant, by submission time — the only two entries whose own
-      // units calculation depends on this one's resulting_stock.
-      // Excluding this entry's own id explicitly, rather than relying
-      // on the timestamp comparison alone to do it — created_at came
-      // back from Postgres as a JS Date object above, which only has
+      // The stock level this entry was originally measured against,
+      // reconstructed from its own already-consistent numbers rather
+      // than looked up from whatever row happens to sit before it.
+      // Whatever gap (PO receipts, manual adjustments, etc.) already
+      // existed between the true previous count and this one is
+      // preserved exactly as it was — only this entry's own count
+      // moves, not the baseline it's measured from.
+      const effectivePreviousStock = entry.resulting_stock + entry.units;
+
+      // The immediately-next entry for THIS variant, by submission
+      // time — the only other entry whose own units calculation
+      // depends on this one's resulting_stock. Excluding this entry's
+      // own id explicitly, rather than relying on the timestamp
+      // comparison alone to do it — created_at came back from
+      // Postgres as a JS Date object above, which only has
       // millisecond precision versus Postgres's own microsecond
       // TIMESTAMPTZ, so comparing the round-tripped value against the
       // column it came from can silently match the same row.
-      const prevRes = await client.query(
-        `SELECT id, resulting_stock FROM sales_entries
-         WHERE variant_id = $1 AND store_id = $2 AND id != $3 AND created_at <= $4
-         ORDER BY created_at DESC LIMIT 1`,
-        [entry.variant_id, req.storeId, id, entry.created_at]
-      );
       const nextRes = await client.query(
         `SELECT id, resulting_stock FROM sales_entries
          WHERE variant_id = $1 AND store_id = $2 AND id != $3 AND created_at >= $4
          ORDER BY created_at ASC LIMIT 1`,
         [entry.variant_id, req.storeId, id, entry.created_at]
       );
-      const prevEntry = prevRes.rows[0] || null;
       const nextEntry = nextRes.rows[0] || null;
 
-      // This entry's own units: how much sold between the previous
-      // count and this one. Only recomputable if the previous entry's
-      // own resulting_stock is known — otherwise left exactly as it
-      // was, since there's nothing reliable to derive a new value from.
-      let newUnitsForThisEntry = entry.units;
-      if (prevEntry && prevEntry.resulting_stock !== null) {
-        newUnitsForThisEntry = prevEntry.resulting_stock - newResultingStock;
-        if (newUnitsForThisEntry < 0) {
-          await client.query("ROLLBACK");
-          return res.status(400).json({
-            error: `That count is higher than the ${prevEntry.resulting_stock} on record from the count right before it. Stock can't increase between two counts without a purchase order or manual adjustment logged in between.`,
-          });
-        }
+      const newUnitsForThisEntry = effectivePreviousStock - newResultingStock;
+      if (newUnitsForThisEntry < 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error: `That count is higher than the ${effectivePreviousStock} on record from the count right before it. Stock can't increase between two counts without a purchase order or manual adjustment logged in between.`,
+        });
       }
 
       // The next entry's own units: how much sold between this count
       // and the next one — shifts because this count just changed,
-      // even though the next entry itself wasn't touched.
+      // even though the next entry itself wasn't touched. This
+      // direction genuinely does need the next row's own
+      // resulting_stock on record; if it doesn't have one, that
+      // entry's own units is left alone, same as the original design.
       let newUnitsForNextEntry = null;
       if (nextEntry && nextEntry.resulting_stock !== null) {
         newUnitsForNextEntry = newResultingStock - nextEntry.resulting_stock;
@@ -185,6 +198,29 @@ router.patch(
         // this variant, so the variant's live, current stock updates
         // directly, matching what the Products screen actually shows.
         await client.query("UPDATE variants SET stock = $1, updated_at = now() WHERE id = $2", [newResultingStock, entry.variant_id]);
+      }
+
+      // Sync the Immediate Report's own frozen "sold" number, if this
+      // variant's actual most-recent count is one of the two rows
+      // whose units just changed. Harmless no-op if the true latest
+      // entry for this variant is something else entirely (a newer
+      // count made since) — its own units weren't touched, so nothing
+      // needs correcting for it.
+      const latestForVariantRes = await client.query(
+        `SELECT id, units FROM sales_entries
+         WHERE variant_id = $1 AND store_id = $2
+         ORDER BY created_at DESC LIMIT 1`,
+        [entry.variant_id, req.storeId]
+      );
+      const latestForVariant = latestForVariantRes.rows[0];
+      if (latestForVariant && (latestForVariant.id === id || latestForVariant.id === nextEntry?.id)) {
+        await client.query(
+          `UPDATE immediate_report_batch_items
+           SET sold = $1
+           WHERE variant_id = $2
+             AND batch_id = (SELECT id FROM immediate_report_batches WHERE store_id = $3)`,
+          [latestForVariant.units, entry.variant_id, req.storeId]
+        );
       }
 
       await client.query("COMMIT");
