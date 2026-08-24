@@ -18,6 +18,7 @@
 // touch its variant rows individually; this filtering rule handles it.
 const pool = require("./db");
 const { computeVariantStatus, rollupStyle } = require("./reorderLogic");
+const { compareVariantsByColorThenSize } = require("./itemNumbers");
 
 async function getEnrichedStyles(storeId, { includeInactive = false } = {}) {
   const styleFilter = includeInactive ? "" : "AND deactivated_at IS NULL";
@@ -78,22 +79,16 @@ async function getEnrichedStyles(storeId, { includeInactive = false } = {}) {
   }
 
   return styles.map((style) => {
-    const styleVariants = (variantsByStyle[style.id] || []).map((v) => {
-      const sales = salesByVariant[v.id] || [];
-      const incoming = incomingByVariant[v.id] || 0;
-      const status = computeVariantStatus({ ...v, sales }, style, incoming);
-      // isActive reflects the SAME either/or rule described above, so
-      // the frontend can show "why is this grayed out" correctly even
-      // for a variant that's active itself but whose style isn't.
-      const isActive = !v.deactivated_at && !style.deactivated_at;
-      // item_number is deliberately excluded here — it's read from the
-      // raw `SELECT *` row above, but must never reach the Shelf tab,
-      // Weekly Report, or anywhere else that calls this function. Only
-      // the future count-sheet endpoint reads it, and it'll do so with
-      // its own dedicated, narrower query rather than through this one.
-      const { item_number, ...variantWithoutItemNumber } = v;
-      return { ...variantWithoutItemNumber, sales, status, isActive };
-    });
+    const styleVariants = (variantsByStyle[style.id] || [])
+      .map((v) => {
+        const sales = salesByVariant[v.id] || [];
+        const incoming = incomingByVariant[v.id] || 0;
+        const status = computeVariantStatus({ ...v, sales }, style, incoming);
+        const isActive = !v.deactivated_at && !style.deactivated_at;
+        const { item_number, ...variantWithoutItemNumber } = v;
+        return { ...variantWithoutItemNumber, sales, status, isActive };
+      })
+      .sort(compareVariantsByColorThenSize);
     const rollup = rollupStyle(styleVariants);
     const isActive = !style.deactivated_at;
     return { ...style, variants: styleVariants, rollup, isActive };

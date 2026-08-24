@@ -40,6 +40,19 @@ function getLastCompleteWeekRange() {
   return { start, end: yesterday };
 }
 
+// The entire previous calendar month, regardless of what day of the
+// current month it is — viewed any day in August, this is always
+// July 1 through July 31, not a rolling 30-day window. monthLabel is
+// just the month name ("July"), for the report's own header.
+function getPreviousCalendarMonthRange() {
+  const now = new Date();
+  const firstOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const start = new Date(firstOfThisMonth.getFullYear(), firstOfThisMonth.getMonth() - 1, 1);
+  const end = new Date(firstOfThisMonth.getFullYear(), firstOfThisMonth.getMonth(), 0); // day 0 = last day of the prior month
+  const monthLabel = start.toLocaleDateString("en-US", { month: "long" });
+  return { start, end, monthLabel };
+}
+
 function unitsSoldInRange(salesEntries, startStr, endStr) {
   return (salesEntries || [])
     .filter((e) => {
@@ -47,6 +60,98 @@ function unitsSoldInRange(salesEntries, startStr, endStr) {
       return endDateStr >= startStr && endDateStr <= endStr;
     })
     .reduce((sum, e) => sum + Number(e.units || 0), 0);
+}
+
+// True if at least one sales entry's end date falls within this range
+// — i.e. a real count actually happened for this period, as opposed to
+// nobody having counted at all. unitsSoldInRange alone can't tell
+// these apart, since it returns 0 either way; this is what lets the
+// running averages below skip a genuinely untracked period instead of
+// silently treating "nobody counted" the same as "confirmed zero
+// sold," which would understate the average the same way counting
+// time before tracking began ever did.
+function hasSalesRecordInRange(salesEntries, startStr, endStr) {
+  return (salesEntries || []).some((e) => {
+    const endDateStr = toLocalDateStr(new Date(e.end_date));
+    return endDateStr >= startStr && endDateStr <= endStr;
+  });
+}
+
+// The running average of a variant's own per-calendar-month sales
+// totals — not a single month's total, and not the same thing as the
+// existing all-time daily rate (which is one continuous average since
+// the first count, blind to calendar month boundaries). Walks backward
+// one full month at a time from reportMonthStart, summing that
+// month's actual sales, stopping once it reaches a month entirely
+// before any sales were ever recorded. Deliberately keyed off the
+// earliest actual sales entry, not the variant's created_at — a style
+// can sit in the catalog for months before anyone starts actively
+// counting it, and treating that whole gap as a string of genuine
+// "zero-sales months" would badly understate the true average. Any
+// individual month with no recorded count at all (a gap between two
+// otherwise-tracked months) is skipped the same way, rather than
+// counted as a zero — for the same reason. A variant with no sales
+// history at all returns null, same convention as an unset rate
+// elsewhere ("—" on screen).
+function computeRunningMonthlyAverage(sales, reportMonthStart) {
+  if (!sales || sales.length === 0) return null;
+  const earliestStart = sales.reduce((earliest, e) => {
+    const d = new Date(e.start_date);
+    return !earliest || d < earliest ? d : earliest;
+  }, null);
+
+  const monthlyTotals = [];
+  let cursor = new Date(reportMonthStart.getFullYear(), reportMonthStart.getMonth(), 1);
+
+  // Safety cap (10 years of months) — purely defensive, so a bad
+  // date value could never cause a runaway loop; a real store's
+  // history should never come close to this.
+  for (let i = 0; i < 120; i++) {
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    if (monthEnd < earliestStart) break; // this entire month is before any recorded sales
+    const startStr = toLocalDateStr(cursor);
+    const endStr = toLocalDateStr(monthEnd);
+    if (hasSalesRecordInRange(sales, startStr, endStr)) {
+      monthlyTotals.push(unitsSoldInRange(sales, startStr, endStr));
+    }
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+  }
+
+  if (monthlyTotals.length === 0) return null;
+  return monthlyTotals.reduce((sum, n) => sum + n, 0) / monthlyTotals.length;
+}
+
+// Same idea as computeRunningMonthlyAverage above, one level down —
+// fixed, non-overlapping 7-day buckets instead of calendar months.
+// Weekly's own date range was already a fixed period each time the
+// report runs (the last complete 7 days), unlike Monthly's old rolling
+// 30-day window, so only this average needed the accumulate-over-time
+// treatment — the "Sold" window itself didn't need to change.
+function computeRunningWeeklyAverage(sales, reportWeekStart) {
+  if (!sales || sales.length === 0) return null;
+  const earliestStart = sales.reduce((earliest, e) => {
+    const d = new Date(e.start_date);
+    return !earliest || d < earliest ? d : earliest;
+  }, null);
+
+  const weeklyTotals = [];
+  let cursorStart = new Date(reportWeekStart.getFullYear(), reportWeekStart.getMonth(), reportWeekStart.getDate());
+
+  // Safety cap (10 years of weeks) — same purely defensive purpose as
+  // the monthly version's cap.
+  for (let i = 0; i < 520; i++) {
+    const cursorEnd = new Date(cursorStart.getFullYear(), cursorStart.getMonth(), cursorStart.getDate() + 6);
+    if (cursorEnd < earliestStart) break; // this entire week is before any recorded sales
+    const startStr = toLocalDateStr(cursorStart);
+    const endStr = toLocalDateStr(cursorEnd);
+    if (hasSalesRecordInRange(sales, startStr, endStr)) {
+      weeklyTotals.push(unitsSoldInRange(sales, startStr, endStr));
+    }
+    cursorStart = new Date(cursorStart.getFullYear(), cursorStart.getMonth(), cursorStart.getDate() - 7);
+  }
+
+  if (weeklyTotals.length === 0) return null;
+  return weeklyTotals.reduce((sum, n) => sum + n, 0) / weeklyTotals.length;
 }
 
 function buildAlerts(enrichedStyles, vendorNameById) {
@@ -68,7 +173,7 @@ function buildAlerts(enrichedStyles, vendorNameById) {
   return alerts;
 }
 
-function buildGroups(enrichedStyles, computeSold) {
+function buildGroups(enrichedStyles, computeSold, computeSecondaryRate) {
   return [...enrichedStyles]
     .sort((a, b) => {
       const worstA = a.variants.reduce((worst, v) => Math.max(worst, TIER_PRIORITY[physicalTierFromStatus(v.status)]), 0);
@@ -88,7 +193,7 @@ function buildGroups(enrichedStyles, computeSold) {
           sku: v.sku,
           stock: Number(v.stock),
           sold: computeSold(v),
-          rate30Day: v.status.rate30Day,
+          rate30Day: computeSecondaryRate ? computeSecondaryRate(v) : v.status.rate30Day,
           rateAllTime: v.status.rate,
           daysRemaining: v.status.daysRemaining,
           tier: physicalTierFromStatus(v.status),
@@ -117,7 +222,11 @@ async function getWeeklyReportData(storeId) {
 
   const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
   const alerts = buildAlerts(enrichedStyles, vendorNameById);
-  const groups = buildGroups(enrichedStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr));
+  const groups = buildGroups(
+    enrichedStyles,
+    (v) => unitsSoldInRange(v.sales, startStr, endStr),
+    (v) => computeRunningWeeklyAverage(v.sales, start)
+  );
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
 
   return {
@@ -130,6 +239,8 @@ async function getWeeklyReportData(storeId) {
     weekEnd: endStr,
     weekStartDisplay: formatDisplayDate(startStr),
     weekEndDisplay: formatDisplayDate(endStr),
+    secondaryRateLabel: "Weekly Average",
+    secondaryRateUnit: "week",
     groups,
     totalVariants,
     totalStyles: enrichedStyles.length,
@@ -140,21 +251,28 @@ async function getWeeklyReportData(storeId) {
 
 async function getMonthlyReportData(storeId) {
   const enrichedStyles = await getEnrichedStyles(storeId);
-  const { start, end } = getLastCompleteRange(30);
+  const { start, end, monthLabel } = getPreviousCalendarMonthRange();
   const startStr = toLocalDateStr(start);
   const endStr = toLocalDateStr(end);
 
   const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
   const alerts = buildAlerts(enrichedStyles, vendorNameById);
-  const groups = buildGroups(enrichedStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr));
+  const groups = buildGroups(
+    enrichedStyles,
+    (v) => unitsSoldInRange(v.sales, startStr, endStr),
+    (v) => computeRunningMonthlyAverage(v.sales, start)
+  );
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
 
   return {
     reportLabel: "Monthly Report",
+    monthLabel,
     rangeStart: startStr,
     rangeEnd: endStr,
     rangeStartDisplay: formatDisplayDate(startStr),
     rangeEndDisplay: formatDisplayDate(endStr),
+    secondaryRateLabel: "Monthly Average",
+    secondaryRateUnit: "month",
     groups,
     totalVariants,
     totalStyles: enrichedStyles.length,
@@ -220,5 +338,6 @@ module.exports = {
   getMovementReportData,
   getLastCompleteWeekRange,
   getLastCompleteRange,
+  getPreviousCalendarMonthRange,
   toLocalDateStr,
 };

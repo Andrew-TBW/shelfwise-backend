@@ -152,7 +152,7 @@ router.post(
   "/:id/sales",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    const { startDate, endDate, units, source } = req.body;
+    const { startDate, endDate, units, source, batchId } = req.body;
     const finalSource = source === "voice" ? "voice" : "manual";
 
     if (!startDate || !endDate) return res.status(400).json({ error: "startDate and endDate are required" });
@@ -196,9 +196,9 @@ router.post(
       const newStock = Math.max(0, currentStock - Number(units));
 
       await client.query(
-        `INSERT INTO sales_entries (store_id, variant_id, start_date, end_date, units, source)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [req.storeId, id, startDate, endDate, Number(units), finalSource]
+        `INSERT INTO sales_entries (store_id, variant_id, start_date, end_date, units, source, resulting_stock, batch_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [req.storeId, id, startDate, endDate, Number(units), finalSource, newStock, batchId || null]
       );
       await client.query("UPDATE variants SET stock = $1, updated_at = now() WHERE id = $2", [newStock, id]);
 

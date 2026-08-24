@@ -121,7 +121,7 @@ function renderTickerBlock(report) {
 const th = (label) =>
   `<th style="text-align:left; font-size:10px; letter-spacing:0.03em; color:${COLORS.monoGray}; padding:4px 8px; border-bottom:1px solid ${COLORS.line};">${label}</th>`;
 
-function renderGroup(group, showSpeed) {
+function renderGroup(group, showSpeed, secondaryRateLabel = "30-day avg.", secondaryRateUnit = "day") {
   // "N/A" for an unclassified style, rather than any kind of "?"
   // placeholder — these are two independent, owner-set
   // classifications, so one being unset doesn't imply anything about
@@ -141,7 +141,7 @@ function renderGroup(group, showSpeed) {
       </td>
     </tr>
     <tr>
-      ${th("Variant")}${th("Inventory")}${th("Sold")}${th("30-day avg.")}${th("All-time avg.")}${th("Days left")}${th("Status")}
+      ${th("Variant")}${th("Inventory")}${th("Sold")}${th(secondaryRateLabel)}${th("All-time avg.")}${th("Days left")}${th("Status")}
     </tr>`;
 
   const rows = group.variants
@@ -159,7 +159,7 @@ function renderGroup(group, showSpeed) {
         ${td(`${escapeHtml(v.label)}<br/><span style="font-size:10px; color:${COLORS.monoGray};">${escapeHtml(v.sku)}</span>`)}
         ${td(v.stock, true)}
         ${td(v.sold, true)}
-        ${td(v.rate30Day > 0 ? `${v.rate30Day.toFixed(2)}/day` : "—", true)}
+        ${td(v.rate30Day > 0 ? `${v.rate30Day.toFixed(2)}/${secondaryRateUnit}` : "—", true)}
         ${td(v.rateAllTime > 0 ? `${v.rateAllTime.toFixed(2)}/day` : "—", true)}
         ${td(v.daysRemaining !== null ? Math.floor(v.daysRemaining) : "—", true)}
         <td style="padding:6px 8px; border-bottom:1px dashed ${COLORS.line}; font-size:12px;">
@@ -178,13 +178,21 @@ function renderGroup(group, showSpeed) {
 // is. showSpeed defaults true — only the two movement-based reports
 // (Fast Movers / Slow Movers) turn it off, since it'd be redundant
 // there.
-function renderReportEmail(storeName, report, { rangeLabel, showSpeed = true } = {}) {
+function renderReportEmail(storeName, report, { rangeLabel, showSpeed = true, greetingLabel, secondaryRateLabel, secondaryRateUnit } = {}) {
   const { reportLabel, groups, totalVariants } = report;
 
   const bodyRows =
     totalVariants === 0
       ? `<tr><td colspan="7" style="padding:30px 8px; text-align:center; color:${COLORS.monoGray}; font-size:13px;">No styles on the shelf yet — nothing to report.</td></tr>`
-      : groups.map((g) => renderGroup(g, showSpeed)).join("");
+      : groups.map((g) => renderGroup(g, showSpeed, secondaryRateLabel, secondaryRateUnit)).join("");
+
+  // A plain hyperlink — deliberately not an image. Wrapping a real
+  // <img> in <a href> would work fine across clients too, but there's
+  // no logo asset to link yet; a text link needs nothing hosted
+  // anywhere and works identically everywhere mail gets read.
+  const greetingSentence = rangeLabel
+    ? `Here's your ${greetingLabel} for ${escapeHtml(rangeLabel)}!`
+    : `Here's your ${greetingLabel}!`;
 
   return `<!DOCTYPE html>
 <html>
@@ -194,7 +202,13 @@ function renderReportEmail(storeName, report, { rangeLabel, showSpeed = true } =
       <td align="center">
         <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="background:${COLORS.card}; border-radius:6px; overflow:hidden;">
           <tr>
-            <td style="padding:24px 24px 8px;">
+            <td style="padding:24px 24px 8px; font-size:14px; color:${COLORS.ink}; line-height:1.5;">
+              ${greetingSentence}
+              <a href="https://app.arthuriq.com" style="color:${COLORS.onOrderBlue}; text-decoration:underline;">visit the website</a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:0 24px 8px;">
               <div style="font-family:Georgia, serif; font-weight:bold; font-size:20px; color:${COLORS.ink};">${escapeHtml(storeName)}</div>
             </td>
           </tr>
@@ -228,23 +242,39 @@ function renderReportEmail(storeName, report, { rangeLabel, showSpeed = true } =
 // general one — anything that already imports renderWeeklyReportEmail
 // by name keeps working exactly as before.
 function renderWeeklyReportEmail(storeName, report) {
-  return renderReportEmail(storeName, report, { rangeLabel: `${report.weekStartDisplay} – ${report.weekEndDisplay}` });
+  return renderReportEmail(storeName, report, {
+    rangeLabel: `${report.weekStartDisplay} – ${report.weekEndDisplay}`,
+    greetingLabel: "weekly report",
+    secondaryRateLabel: report.secondaryRateLabel,
+    secondaryRateUnit: report.secondaryRateUnit,
+  });
 }
 
 function renderMonthlyReportEmail(storeName, report) {
-  return renderReportEmail(storeName, report, { rangeLabel: `${report.rangeStartDisplay} – ${report.rangeEndDisplay}` });
+  return renderReportEmail(storeName, report, {
+    // monthLabel ("July") rather than a date-range string — this
+    // shows in both the greeting sentence and the header subtitle,
+    // matching the on-screen report's own header.
+    rangeLabel: report.monthLabel,
+    greetingLabel: "monthly report",
+    secondaryRateLabel: report.secondaryRateLabel,
+    secondaryRateUnit: report.secondaryRateUnit,
+  });
 }
 
 function renderImmediateReportEmail(storeName, report) {
-  return renderReportEmail(storeName, report, { rangeLabel: null });
+  return renderReportEmail(storeName, report, { rangeLabel: null, greetingLabel: "immediate report" });
 }
 
 // Fast Movers / Slow Movers — same 30-day-window range label as
-// Monthly, since "Sold" here is computed the same way.
+// Monthly, since "Sold" here is computed the same way. One shared
+// function for both tiers, so the greeting is built off report.reportLabel
+// ("Fast Movers" or "Slow Movers") rather than hard-coded twice.
 function renderMovementReportEmail(storeName, report) {
   return renderReportEmail(storeName, report, {
     rangeLabel: `${report.rangeStartDisplay} – ${report.rangeEndDisplay}`,
     showSpeed: false,
+    greetingLabel: `${report.reportLabel} report`,
   });
 }
 

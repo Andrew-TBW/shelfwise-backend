@@ -43,7 +43,7 @@ router.post(
       const styleRes = await client.query(
         `INSERT INTO styles (store_id, vendor_id, name, category, lead_time_days, target_days, margin_tier, movement_tier)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
-        [req.storeId, vendorId, name.trim(), category || "", Number(leadTimeDays) || 7, Number(targetDays) || 14, marginTier || null, movementTier || null]
+        [req.storeId, vendorId, name.trim(), category || "", Number(leadTimeDays) || 21, Number(targetDays) || 30, marginTier || null, movementTier || null]
       );
       const styleId = styleRes.rows[0].id;
 
