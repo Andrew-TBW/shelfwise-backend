@@ -2,7 +2,7 @@
 const express = require("express");
 const pool = require("../db");
 const asyncHandler = require("../middleware/asyncHandler");
-const { getWeeklyReportData, getMonthlyReportData, getImmediateReportData, getMovementReportData } = require("../reportData");
+const { getWeeklyReportData, getMonthlyReportData, getImmediateReportData, getMovementReportData, formatDisplayDate, toLocalDateStr } = require("../reportData");
 const { renderWeeklyReportEmail, renderMonthlyReportEmail, renderImmediateReportEmail, renderMovementReportEmail } = require("../emailTemplates/weeklyReport");
 const { sendEmail } = require("../emailSender");
 const { addItemsToBatch, getCurrentBatch, markBatchEmailed } = require("../immediateReportBatches");
@@ -60,7 +60,7 @@ router.post(
     await sendReportNow(req, res, {
       getReport: () => getMonthlyReportData(req.storeId),
       renderEmail: renderMonthlyReportEmail,
-      subjectLabel: (r) => `Monthly Report (${r.rangeStartDisplay} – ${r.rangeEndDisplay})`,
+      subjectLabel: (r) => `Monthly Report (${r.monthLabel})`,
     });
   })
 );
@@ -101,7 +101,7 @@ router.post(
     await sendReportNow(req, res, {
       getReport: () => getImmediateReportData(req.storeId, batch.items),
       renderEmail: renderImmediateReportEmail,
-      subjectLabel: () => "Immediate Report",
+      subjectLabel: () => `Immediate Report (${formatDisplayDate(toLocalDateStr(new Date()))})`,
       // Marking this only on a successful send — matching the
       // scheduled script's own behavior — is what makes the NEXT
       // submission correctly reset instead of continuing to add onto

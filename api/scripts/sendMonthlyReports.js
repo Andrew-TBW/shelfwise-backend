@@ -53,7 +53,7 @@ async function main() {
 
       const report = await getMonthlyReportData(store.id);
       const html = renderMonthlyReportEmail(store.name, report);
-      const subject = `${store.name} — Monthly Report (${report.rangeStartDisplay} – ${report.rangeEndDisplay})`;
+      const subject = `${store.name} — Monthly Report (${report.monthLabel})`;
 
       for (const recipient of recipients) {
         await sendEmail({ to: recipient.email, subject, html });

@@ -33,11 +33,22 @@ function getLastCompleteRange(days) {
   return { start, end: yesterday };
 }
 
-function getLastCompleteWeekRange() {
+// The most recently COMPLETED Monday-through-Sunday calendar week —
+// stable regardless of which day of the week this gets called on,
+// unlike a rolling "last 7 days" window that would shift every single
+// day and make the same underlying sales data produce a different
+// running average depending purely on what day someone happened to
+// check the report. If today is Monday, that's simply the week that
+// just ended yesterday; any other day, it's the last full week before
+// the one currently in progress — never a partial, still-accumulating
+// week.
+function getPreviousCalendarWeekRange() {
   const now = new Date();
   const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  const start = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate() - 6);
-  return { start, end: yesterday };
+  const yesterdayDay = yesterday.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+  const end = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate() - yesterdayDay);
+  const start = new Date(end.getFullYear(), end.getMonth(), end.getDate() - 6);
+  return { start, end };
 }
 
 // The entire previous calendar month, regardless of what day of the
@@ -77,22 +88,72 @@ function hasSalesRecordInRange(salesEntries, startStr, endStr) {
   });
 }
 
+// Whole-days-inclusive span between two "YYYY-MM-DD" strings — e.g.
+// the same day counts as 1, not 0.
+function daysBetweenInclusive(startStr, endStr) {
+  const start = new Date(`${startStr}T00:00:00`);
+  const end = new Date(`${endStr}T00:00:00`);
+  return Math.round((end - start) / 86400000) + 1;
+}
+
+// True if a sales entry's full [start_date, end_date] span overlaps
+// this range AT ALL — not just whether its end date happens to land
+// inside it. Someone doesn't submit a count every single day, so a
+// single counting period regularly spans more than one week or month;
+// treating it as belonging only to whichever bucket its end date falls
+// in (the convention the "Sold" column still uses, for a single
+// period snapshot) would mean a bucket a period genuinely overlaps —
+// just not where it happens to end — gets silently skipped from the
+// running average entirely, even though real, known sales activity
+// touched it.
+function hasOverlapInRange(salesEntries, rangeStartStr, rangeEndStr) {
+  return (salesEntries || []).some((e) => {
+    const entryStartStr = toLocalDateStr(new Date(e.start_date));
+    const entryEndStr = toLocalDateStr(new Date(e.end_date));
+    return !(entryEndStr < rangeStartStr || entryStartStr > rangeEndStr);
+  });
+}
+
+// Splits each sales entry's units proportionally across every bucket
+// its counting period actually spans, by the fraction of its total
+// days that fall in this particular bucket — rather than dumping the
+// whole period's units into a single bucket. A count covering 10 days
+// with 70 units sold, when it crosses a week boundary 7 days in, credits
+// that first week only 7/10 of the 70 (49), and the remainder (21) to
+// the following week — not all 70 to whichever week its end date lands
+// in. Every entry's contribution always sums back to its own original
+// units across however many buckets it touches, so nothing is ever
+// lost or invented — just distributed more honestly than an all-or-
+// nothing assignment would.
+function proratedUnitsInRange(salesEntries, rangeStartStr, rangeEndStr) {
+  return (salesEntries || []).reduce((sum, e) => {
+    const entryStartStr = toLocalDateStr(new Date(e.start_date));
+    const entryEndStr = toLocalDateStr(new Date(e.end_date));
+    if (entryEndStr < rangeStartStr || entryStartStr > rangeEndStr) return sum; // no overlap at all
+    const overlapStartStr = entryStartStr > rangeStartStr ? entryStartStr : rangeStartStr;
+    const overlapEndStr = entryEndStr < rangeEndStr ? entryEndStr : rangeEndStr;
+    const overlapDays = daysBetweenInclusive(overlapStartStr, overlapEndStr);
+    const totalDays = daysBetweenInclusive(entryStartStr, entryEndStr);
+    return sum + Number(e.units || 0) * (overlapDays / totalDays);
+  }, 0);
+}
+
 // The running average of a variant's own per-calendar-month sales
 // totals — not a single month's total, and not the same thing as the
 // existing all-time daily rate (which is one continuous average since
 // the first count, blind to calendar month boundaries). Walks backward
 // one full month at a time from reportMonthStart, summing that
-// month's actual sales, stopping once it reaches a month entirely
-// before any sales were ever recorded. Deliberately keyed off the
-// earliest actual sales entry, not the variant's created_at — a style
-// can sit in the catalog for months before anyone starts actively
-// counting it, and treating that whole gap as a string of genuine
-// "zero-sales months" would badly understate the true average. Any
-// individual month with no recorded count at all (a gap between two
-// otherwise-tracked months) is skipped the same way, rather than
-// counted as a zero — for the same reason. A variant with no sales
-// history at all returns null, same convention as an unset rate
-// elsewhere ("—" on screen).
+// month's actual (prorated) sales, stopping once it reaches a month
+// entirely before any sales were ever recorded. Deliberately keyed off
+// the earliest actual sales entry, not the variant's created_at — a
+// style can sit in the catalog for months before anyone starts
+// actively counting it, and treating that whole gap as a string of
+// genuine "zero-sales months" would badly understate the true
+// average. Any individual month no sales period overlaps at all (a
+// real gap between two otherwise-tracked months) is skipped the same
+// way, rather than counted as a zero — for the same reason. A variant
+// with no sales history at all returns null, same convention as an
+// unset rate elsewhere ("—" on screen).
 function computeRunningMonthlyAverage(sales, reportMonthStart) {
   if (!sales || sales.length === 0) return null;
   const earliestStart = sales.reduce((earliest, e) => {
@@ -111,8 +172,8 @@ function computeRunningMonthlyAverage(sales, reportMonthStart) {
     if (monthEnd < earliestStart) break; // this entire month is before any recorded sales
     const startStr = toLocalDateStr(cursor);
     const endStr = toLocalDateStr(monthEnd);
-    if (hasSalesRecordInRange(sales, startStr, endStr)) {
-      monthlyTotals.push(unitsSoldInRange(sales, startStr, endStr));
+    if (hasOverlapInRange(sales, startStr, endStr)) {
+      monthlyTotals.push(proratedUnitsInRange(sales, startStr, endStr));
     }
     cursor = new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
   }
@@ -122,11 +183,21 @@ function computeRunningMonthlyAverage(sales, reportMonthStart) {
 }
 
 // Same idea as computeRunningMonthlyAverage above, one level down —
-// fixed, non-overlapping 7-day buckets instead of calendar months.
-// Weekly's own date range was already a fixed period each time the
-// report runs (the last complete 7 days), unlike Monthly's old rolling
-// 30-day window, so only this average needed the accumulate-over-time
-// treatment — the "Sold" window itself didn't need to change.
+// fixed, non-overlapping 7-day buckets instead of calendar months,
+// aligned to a real Monday-through-Sunday week (see
+// getPreviousCalendarWeekRange) so the buckets themselves land in the
+// same place regardless of which day of the week this is computed on.
+// Unlike the monthly version, this one is deliberately bounded to the
+// most recent 8 weeks WITH data (not 8 calendar weeks regardless of
+// content — a week with no overlapping sales still doesn't count
+// toward the 8, same as it doesn't count toward the total elsewhere).
+// Builds up from fewer than 8 while history is still short; once an
+// 8th week's worth of data exists and a 9th completes, the oldest of
+// the 8 quietly drops off and the 9th takes its place, and so on —
+// a trailing window rather than an all-time average, so a variant's
+// stat reflects its recent selling pattern rather than being anchored
+// forever to however it originally sold months or years back.
+const WEEKLY_AVERAGE_WINDOW = 8;
 function computeRunningWeeklyAverage(sales, reportWeekStart) {
   if (!sales || sales.length === 0) return null;
   const earliestStart = sales.reduce((earliest, e) => {
@@ -138,14 +209,16 @@ function computeRunningWeeklyAverage(sales, reportWeekStart) {
   let cursorStart = new Date(reportWeekStart.getFullYear(), reportWeekStart.getMonth(), reportWeekStart.getDate());
 
   // Safety cap (10 years of weeks) — same purely defensive purpose as
-  // the monthly version's cap.
+  // the monthly version's cap. In practice the window cap below stops
+  // this loop almost immediately once enough history exists.
   for (let i = 0; i < 520; i++) {
+    if (weeklyTotals.length >= WEEKLY_AVERAGE_WINDOW) break; // already have the most recent 8 weeks with data — anything older doesn't count
     const cursorEnd = new Date(cursorStart.getFullYear(), cursorStart.getMonth(), cursorStart.getDate() + 6);
     if (cursorEnd < earliestStart) break; // this entire week is before any recorded sales
     const startStr = toLocalDateStr(cursorStart);
     const endStr = toLocalDateStr(cursorEnd);
-    if (hasSalesRecordInRange(sales, startStr, endStr)) {
-      weeklyTotals.push(unitsSoldInRange(sales, startStr, endStr));
+    if (hasOverlapInRange(sales, startStr, endStr)) {
+      weeklyTotals.push(proratedUnitsInRange(sales, startStr, endStr));
     }
     cursorStart = new Date(cursorStart.getFullYear(), cursorStart.getMonth(), cursorStart.getDate() - 7);
   }
@@ -216,7 +289,7 @@ async function getVendorAndPOInfo(storeId) {
 
 async function getWeeklyReportData(storeId) {
   const enrichedStyles = await getEnrichedStyles(storeId);
-  const { start, end } = getLastCompleteWeekRange();
+  const { start, end } = getPreviousCalendarWeekRange();
   const startStr = toLocalDateStr(start);
   const endStr = toLocalDateStr(end);
 
@@ -336,8 +409,9 @@ module.exports = {
   getMonthlyReportData,
   getImmediateReportData,
   getMovementReportData,
-  getLastCompleteWeekRange,
   getLastCompleteRange,
+  getPreviousCalendarWeekRange,
   getPreviousCalendarMonthRange,
   toLocalDateStr,
+  formatDisplayDate,
 };

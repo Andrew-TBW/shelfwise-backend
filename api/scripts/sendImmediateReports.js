@@ -16,7 +16,7 @@
 require("dotenv").config();
 const pool = require("../src/db");
 const { findDueBatches, getCurrentBatch, markBatchEmailed } = require("../src/immediateReportBatches");
-const { getImmediateReportData } = require("../src/reportData");
+const { getImmediateReportData, formatDisplayDate, toLocalDateStr } = require("../src/reportData");
 const { renderImmediateReportEmail } = require("../src/emailTemplates/weeklyReport");
 const { sendEmail } = require("../src/emailSender");
 
@@ -55,7 +55,7 @@ async function main() {
 
       const report = await getImmediateReportData(batchRow.store_id, batch.items);
       const html = renderImmediateReportEmail(batchRow.store_name, report);
-      const subject = `${batchRow.store_name} — Immediate Report`;
+      const subject = `${batchRow.store_name} — Immediate Report (${formatDisplayDate(toLocalDateStr(new Date()))})`;
 
       for (const recipient of recipients) {
         await sendEmail({ to: recipient.email, subject, html });

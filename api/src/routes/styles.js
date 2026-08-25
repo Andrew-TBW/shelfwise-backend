@@ -28,8 +28,8 @@ router.post(
     if (!Array.isArray(variants) || variants.length === 0) {
       return res.status(400).json({ error: "at least one variant is required" });
     }
-    if (marginTier !== undefined && marginTier !== null && !["high", "mid", "low"].includes(marginTier)) {
-      return res.status(400).json({ error: "marginTier must be high, mid, low, or omitted" });
+    if (marginTier !== undefined && marginTier !== null && !["high", "mid"].includes(marginTier)) {
+      return res.status(400).json({ error: "marginTier must be high, mid, or omitted" });
     }
     if (movementTier !== undefined && movementTier !== null && !["fast", "slow"].includes(movementTier)) {
       return res.status(400).json({ error: "movementTier must be fast, slow, or omitted" });
@@ -81,8 +81,8 @@ router.patch(
   "/:id",
   asyncHandler(async (req, res) => {
     const { id } = req.params;
-    if (req.body.marginTier !== undefined && req.body.marginTier !== null && !["high", "mid", "low"].includes(req.body.marginTier)) {
-      return res.status(400).json({ error: "marginTier must be high, mid, low, or null" });
+    if (req.body.marginTier !== undefined && req.body.marginTier !== null && !["high", "mid"].includes(req.body.marginTier)) {
+      return res.status(400).json({ error: "marginTier must be high, mid, or null" });
     }
     if (req.body.movementTier !== undefined && req.body.movementTier !== null && !["fast", "slow"].includes(req.body.movementTier)) {
       return res.status(400).json({ error: "movementTier must be fast, slow, or null" });
