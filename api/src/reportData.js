@@ -154,6 +154,11 @@ function proratedUnitsInRange(salesEntries, rangeStartStr, rangeEndStr) {
 // way, rather than counted as a zero — for the same reason. A variant
 // with no sales history at all returns null, same convention as an
 // unset rate elsewhere ("—" on screen).
+// Bounded to the most recent 2 months WITH data (not 2 calendar months
+// regardless of content) — same trailing-window treatment as the
+// weekly average's own 8-week bound, just a shorter window since a
+// month already covers roughly 4x the ground a week does.
+const MONTHLY_AVERAGE_WINDOW = 2;
 function computeRunningMonthlyAverage(sales, reportMonthStart) {
   if (!sales || sales.length === 0) return null;
   const earliestStart = sales.reduce((earliest, e) => {
@@ -168,6 +173,7 @@ function computeRunningMonthlyAverage(sales, reportMonthStart) {
   // date value could never cause a runaway loop; a real store's
   // history should never come close to this.
   for (let i = 0; i < 120; i++) {
+    if (monthlyTotals.length >= MONTHLY_AVERAGE_WINDOW) break; // already have the most recent 2 months with data — anything older doesn't count
     const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
     if (monthEnd < earliestStart) break; // this entire month is before any recorded sales
     const startStr = toLocalDateStr(cursor);
