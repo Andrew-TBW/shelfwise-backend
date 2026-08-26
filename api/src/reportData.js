@@ -303,7 +303,7 @@ async function getWeeklyReportData(storeId) {
   const alerts = buildAlerts(enrichedStyles, vendorNameById);
   const groups = buildGroups(
     enrichedStyles,
-    (v) => unitsSoldInRange(v.sales, startStr, endStr),
+    (v) => Math.round(proratedUnitsInRange(v.sales, startStr, endStr)),
     (v) => computeRunningWeeklyAverage(v.sales, start)
   );
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
@@ -338,7 +338,7 @@ async function getMonthlyReportData(storeId) {
   const alerts = buildAlerts(enrichedStyles, vendorNameById);
   const groups = buildGroups(
     enrichedStyles,
-    (v) => unitsSoldInRange(v.sales, startStr, endStr),
+    (v) => Math.round(proratedUnitsInRange(v.sales, startStr, endStr)),
     (v) => computeRunningMonthlyAverage(v.sales, start)
   );
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
@@ -393,7 +393,7 @@ async function getMovementReportData(storeId, tier) {
 
   const { vendorNameById, openPOCount } = await getVendorAndPOInfo(storeId);
   const alerts = buildAlerts(enrichedStyles, vendorNameById);
-  const groups = buildGroups(filteredStyles, (v) => unitsSoldInRange(v.sales, startStr, endStr));
+  const groups = buildGroups(filteredStyles, (v) => Math.round(proratedUnitsInRange(v.sales, startStr, endStr)));
   const totalVariants = groups.reduce((s, g) => s + g.variants.length, 0);
 
   return {
