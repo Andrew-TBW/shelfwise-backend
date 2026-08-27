@@ -11,6 +11,7 @@
 const express = require("express");
 const pool = require("../db");
 const asyncHandler = require("../middleware/asyncHandler");
+const { compareVariantsByColorThenSize } = require("../itemNumbers");
 
 const router = express.Router();
 
@@ -56,19 +57,27 @@ router.get(
       groups.map((g) => ({
         batchId: g.batchId,
         submittedAt: g.submittedAt,
-        items: g.items.map((row) => ({
-          id: row.id,
-          variantId: row.variant_id,
-          styleId: row.style_id,
-          styleName: row.style_name,
-          sku: row.sku,
-          size: row.size,
-          color: row.color,
-          startDate: row.start_date,
-          endDate: row.end_date,
-          resultingStock: row.resulting_stock,
-          source: row.source,
-        })),
+        // Sorted the same way apparel sizes are ordered everywhere
+        // else in the app (Products, Reports, Suggested PO) — color
+        // first, then smallest to largest — rather than whatever order
+        // the items happened to be submitted in, which could put a
+        // Large above a Small purely because of which one someone
+        // counted first.
+        items: [...g.items]
+          .sort(compareVariantsByColorThenSize)
+          .map((row) => ({
+            id: row.id,
+            variantId: row.variant_id,
+            styleId: row.style_id,
+            styleName: row.style_name,
+            sku: row.sku,
+            size: row.size,
+            color: row.color,
+            startDate: row.start_date,
+            endDate: row.end_date,
+            resultingStock: row.resulting_stock,
+            source: row.source,
+          })),
       }))
     );
   })
