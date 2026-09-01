@@ -1,22 +1,20 @@
-name: shelfwise
+name: arthuriq-backend-beta
 
 services:
   api:
     build: .
-    container_name: shelfwise_api
+    container_name: arthuriq_beta_api
     restart: unless-stopped
     env_file:
       - .env
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.shelfwise.entrypoints=websecure"
-      - "traefik.http.routers.shelfwise.rule=Host(`api.arthuriq.com`)"
-      - "traefik.http.routers.shelfwise.tls.certresolver=letsencrypt"
-      - "traefik.http.services.shelfwise.loadbalancer.server.port=3002"
+      - "traefik.http.routers.arthuriqbeta.entrypoints=websecure"
+      - "traefik.http.routers.arthuriqbeta.rule=Host(`api-beta.arthuriq.com`)"
+      - "traefik.http.routers.arthuriqbeta.tls.certresolver=letsencrypt"
+      - "traefik.http.services.arthuriqbeta.loadbalancer.server.port=3002"
 
 networks:
   default:
     name: shelfwise_default
-    ipam:
-      config:
-        - subnet: 172.30.0.0/16
+    external: true
