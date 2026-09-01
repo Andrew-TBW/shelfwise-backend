@@ -1,6 +1,6 @@
-# ShelfWise Backend API — Phases 2 & 3
+# ArthurIQ Backend API — Phases 2 & 3
 
-The core API (Phase 2): endpoints for every action ShelfWise.jsx
+The core API (Phase 2): endpoints for every action ArthurIQ.jsx
 currently performs locally, plus the reorder-recommendation math moved
 server-side. Authentication (Phase 3): real login, hashed passwords, and
 sessions — replacing Phase 2's temporary `X-Store-Id` header placeholder.
@@ -11,7 +11,7 @@ There is **no self-serve signup and no payment integration** — that was
 deliberately deferred (see the conversation this was built from) so
 pilot testing could start sooner. Instead:
 
-1. Someone on the ShelfWise team runs `scripts/createPilotAccount.js` to
+1. Someone on the ArthurIQ team runs `scripts/createPilotAccount.js` to
    create a new store + owner account directly in the database. It
    prints a temporary password to the console.
 2. That temporary password gets relayed to the pilot store owner over a
@@ -122,7 +122,44 @@ delivery for full detail.
 - **Automated signup + payment integration**, if/when you're ready to
   move beyond manually onboarding pilot testers (see the earlier
   conversation this was scoped from).
-- **Connect the frontend** (Phase 4 of the Backend Build Plan) —
-  replacing `ShelfWise.jsx`'s `window.storage` calls with real calls to
-  this API, including a login screen and storing the session token.
+- ~~Connect the frontend~~ — done. See the update below.
+
+## Update: connecting the newer frontend (voice count + sales history editing)
+
+A separate, more advanced version of `ArthurIQ.jsx` — with voice-based
+stock counting and the ability to correct previously logged sales entries
+— needed a few additions to connect to this backend:
+
+- **`GET /api/store`** — returns the current session's store `{ id, name }`,
+  so the app's header shows the real store name instead of a placeholder.
+- **`PATCH /api/variants/:variantId/sales/:salesEntryId`** — corrects an
+  existing sales entry (matches "Sales History" → "Edit"). Reconciles
+  stock by the *change* in units, and re-validates the date range doesn't
+  overlap any other entry for that variant, server-side.
+- **Server-side overlap validation added to `POST /api/variants/:id/sales`
+  too** — the original version only checked this on corrections; testing
+  surfaced that a brand-new entry could still be logged with an
+  overlapping range, since nothing blocked it going in the first time.
+  Fixed so both paths are protected the same way.
+- **`source: "voice"` support** on the sales-logging endpoint — voice
+  count sessions log through this same endpoint as manual entries, just
+  tagged differently, rather than needing a separate endpoint.
+- **A real bug fix ported from the frontend**: `periodLengthDays` in
+  `reorderLogic.js` was undercounting date ranges by one day (a Monday–
+  Sunday period was counting as 6 days instead of 7). The newer frontend
+  had already caught and fixed this client-side; the backend's copy of
+  the same formula is now fixed to match, and the corrected rate was
+  verified directly against a real logged sale (10 units over two
+  periods totaling 11 inclusive days → rate 0.909, confirmed via the API).
+
+All of the above was tested against a real, disposable PostgreSQL
+instance and a real bundled build of the new frontend — not just
+reviewed for correct syntax. That included the full login → forced
+password change → real store name shown → style creation → sale logging
+→ overlap rejection (both client-side warning and, separately, a direct
+API-level check with the client-side check bypassed) → sales history
+correction → confirming the correction persisted after a fresh fetch.
+A second pilot account with a different store name was also created and
+logged into, confirming the store name shown is genuinely the logged-in
+store's own name and not a leftover hardcoded value.
 

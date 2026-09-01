@@ -3,7 +3,7 @@
 // Fetches every style for a store, along with its variants, each
 // variant's sales history, and the incoming (on-order) quantity from any
 // submitted/partially_received PO — then runs the reorder math over all
-// of it. This mirrors the `enrichedStyles` useMemo in ShelfWise.jsx
+// of it. This mirrors the `enrichedStyles` useMemo in ArthurIQ.jsx
 // exactly, just computed server-side instead of in the browser.
 //
 // By default, only active styles/variants are returned — matching how

@@ -27,7 +27,7 @@
 
 const STARTING_NUMBER = 100;
 
-// --- Kept byte-identical in spirit to the frontend's copy (ShelfWise.jsx) ---
+// --- Kept byte-identical in spirit to the frontend's copy (ArthurIQ.jsx) ---
 // Recognizes a size as a standard apparel size — XS, S, M, L, XL, 2XL,
 // 3XL, 4XL — matched by its leading letters so it catches both
 // abbreviated ("XL") and fully spelled-out ("Extra Large") forms.

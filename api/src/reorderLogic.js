@@ -1,7 +1,7 @@
 // reorderLogic.js
 //
 // This is a direct port of the pure calculation functions from
-// ShelfWise.jsx (computeDailyRate, tierFromDays, computeVariantStatus,
+// ArthurIQ.jsx (computeDailyRate, tierFromDays, computeVariantStatus,
 // rollupStyle). Moving this server-side means every device gets the same
 // trusted number instead of computing it independently — the whole
 // point of Phase 2.

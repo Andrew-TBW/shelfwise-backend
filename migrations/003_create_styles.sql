@@ -1,6 +1,6 @@
 -- 003_create_styles.sql
 --
--- Matches the `styles` array in ShelfWise.jsx: { id, name, category,
+-- Matches the `styles` array in ArthurIQ.jsx: { id, name, category,
 -- vendorId, leadTimeDays, targetDays, variants: [...] }.
 --
 -- lead_time_days and target_days live here (not per-variant) because the

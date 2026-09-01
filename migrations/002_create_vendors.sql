@@ -1,6 +1,6 @@
 -- 002_create_vendors.sql
 --
--- Matches the `vendors` array in ShelfWise.jsx today: { id, name }.
+-- Matches the `vendors` array in ArthurIQ.jsx today: { id, name }.
 -- A vendor belongs to exactly one store — two different stores that both
 -- buy from "Northgate Ceramics" would each have their own separate vendor
 -- row, since there's no cross-store data sharing anywhere in this schema.

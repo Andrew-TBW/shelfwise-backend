@@ -5,7 +5,7 @@
 // flow yet (deliberately deferred, per the Backend Build Plan).
 //
 // This is a command-line script, not an HTTP endpoint — it's meant to be
-// run by someone on the ShelfWise team with direct database access, not
+// run by someone on the ArthurIQ team with direct database access, not
 // exposed to the internet.
 //
 // Usage:

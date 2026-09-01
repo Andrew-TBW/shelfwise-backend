@@ -1,6 +1,6 @@
 -- 006_create_purchase_orders.sql
 --
--- Matches the `purchaseOrders` array in ShelfWise.jsx: { id, vendorId,
+-- Matches the `purchaseOrders` array in ArthurIQ.jsx: { id, vendorId,
 -- status, createdDate, notes, lines: [...] }.
 --
 -- status is constrained to the exact same five values the frontend's
